@@ -54,6 +54,7 @@
             background-image: radial-gradient(var(--pastel-blue) 1.5px, transparent 1.5px);
             background-size: 30px 30px;
             background-attachment: fixed;
+            zoom: 0.95; /* 將畫面整體縮小為 95% */
         }
 
         .no-scrollbar::-webkit-scrollbar { display: none; }
@@ -325,10 +326,12 @@
                 if (!user) return;
                 const path = db.collection('artifacts').doc(appId).collection('public').doc('data');
                 
-                // 修復清單亂跳的問題：加入第二排序條件 `createdAt`，確保 order 相當時也能保持固定順序
+                // 修復清單亂跳的問題：加入第二排序條件 `doc.id`，確保 order 相當時也能保持固定順序
                 const sortConfig = (a, b) => {
-                    if ((a.order ?? 0) !== (b.order ?? 0)) return (a.order ?? 0) - (b.order ?? 0);
-                    return (a.createdAt || '').localeCompare(b.createdAt || '');
+                    const orderDiff = (a.order ?? 0) - (b.order ?? 0);
+                    if (orderDiff !== 0) return orderDiff;
+                    // 如果 order 相同，使用文件 ID 來穩定排序
+                    return a.id.localeCompare(b.id);
                 };
 
                 const unsubDaily = path.collection('dailyExpenses').onSnapshot(snap => setDailyExpenses(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
