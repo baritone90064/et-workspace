@@ -54,7 +54,7 @@
             background-image: radial-gradient(var(--pastel-blue) 1.5px, transparent 1.5px);
             background-size: 30px 30px;
             background-attachment: fixed;
-            zoom: 0.95; /* 將畫面整體縮小為 95% */
+            zoom: 0.90; /* 將畫面整體縮小為 90% */
         }
 
         .no-scrollbar::-webkit-scrollbar { display: none; }
@@ -882,12 +882,9 @@
                     </form>
 
                     <div className="bubble-card bg-white/60 p-4">
-                        <div className="flex justify-between items-center mb-4 px-2">
+                        <div className="flex justify-between items-center px-2">
                             <h3 className="font-bold text-lg text-[var(--bubble-text)]/80 flex items-center gap-2">
-                                <Icon name="list" size={18} /> 花費明細
-                                <span className="bg-[var(--pastel-yellow)] text-[var(--text-yellow)] px-3 py-1 rounded-full text-sm ml-1">
-                                    總計: ${dailyFilteredTotal.toLocaleString()}
-                                </span>
+                                <Icon name="list" size={18} /> 消費明細
                             </h3>
                             <div className="flex gap-2">
                                 <select value={dailyMonthFilter} onChange={e=>setDailyMonthFilter(e.target.value)} className="!py-1.5 !px-3 !text-sm !rounded-xl !bg-white shadow-sm border-none font-bold">
@@ -898,6 +895,12 @@
                                     <Icon name={dailySort === 'desc' ? "sort-desc" : "sort-asc"} size={18} />
                                 </button>
                             </div>
+                        </div>
+                        
+                        <div className="px-2 mt-2 mb-4">
+                            <span className="bg-[var(--pastel-yellow)] text-[var(--text-yellow)] px-3 py-1.5 rounded-full text-sm font-black inline-block shadow-sm">
+                                總計: ${dailyFilteredTotal.toLocaleString()}
+                            </span>
                         </div>
 
                         <div className="space-y-3">
@@ -913,12 +916,12 @@
                                             <div className="font-bold text-[13px] text-slate-500 mt-0.5">{d.date} • {d.owner}</div>
                                         </div>
                                     </div>
-                                    <div className="flex items-center gap-3">
-                                        <span className="font-black text-xl text-[var(--bubble-text)]">${parseFloat(d.amount).toLocaleString()}</span>
-                                        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                            <button onClick={()=>editDailyExpense(d)} className="bg-[var(--pastel-blue)]/30 text-[var(--text-blue)] p-2 rounded-xl transition-all hover:bg-[var(--pastel-blue)]"><Icon name="edit-2" size={16} /></button>
-                                            <button onClick={()=>showConfirm('刪除花費', '確定要刪除這筆紀錄嗎？', ()=>db.collection('artifacts').doc(appId).collection('public').doc('data').collection('dailyExpenses').doc(d.id).delete())} className="bg-[var(--pastel-orange)]/30 text-[var(--text-orange)] p-2 rounded-xl transition-all hover:bg-[var(--pastel-orange)]"><Icon name="trash-2" size={16} /></button>
+                                    <div className="flex flex-col sm:flex-row items-end sm:items-center gap-2 ml-auto pl-2">
+                                        <div className="flex gap-1 sm:opacity-0 group-hover:opacity-100 transition-opacity order-2 sm:order-1">
+                                            <button onClick={()=>editDailyExpense(d)} className="bg-[var(--pastel-blue)]/30 text-[var(--text-blue)] p-1.5 rounded-xl transition-all hover:bg-[var(--pastel-blue)]"><Icon name="edit-2" size={16} /></button>
+                                            <button onClick={()=>showConfirm('刪除花費', '確定要刪除這筆紀錄嗎？', ()=>db.collection('artifacts').doc(appId).collection('public').doc('data').collection('dailyExpenses').doc(d.id).delete())} className="bg-[var(--pastel-orange)]/30 text-[var(--text-orange)] p-1.5 rounded-xl transition-all hover:bg-[var(--pastel-orange)]"><Icon name="trash-2" size={16} /></button>
                                         </div>
+                                        <span className="font-black text-xl text-[var(--bubble-text)] text-right order-1 sm:order-2">${parseFloat(d.amount).toLocaleString()}</span>
                                     </div>
                                 </div>
                             ))}
@@ -1100,10 +1103,10 @@
                     {/* 篩選區間與條件設定 */}
                     <div className="bubble-card p-5 bg-white">
                         <h3 className="font-bold text-sm text-[var(--bubble-text)]/60 mb-3">資料篩選設定</h3>
-                        <div className="flex items-center gap-2">
-                            <input type="date" value={analyticsStart} onChange={e=>setAnalyticsStart(e.target.value)} className="w-full !py-2 !px-3 !text-sm" />
+                        <div className="grid grid-cols-[1fr_auto_1fr] gap-2 items-center">
+                            <input type="date" value={analyticsStart} onChange={e=>setAnalyticsStart(e.target.value)} className="w-full min-w-0 !py-2 !px-3 !text-sm" />
                             <span className="font-black text-gray-300">→</span>
-                            <input type="date" value={analyticsEnd} onChange={e=>setAnalyticsEnd(e.target.value)} className="w-full !py-2 !px-3 !text-sm" />
+                            <input type="date" value={analyticsEnd} onChange={e=>setAnalyticsEnd(e.target.value)} className="w-full min-w-0 !py-2 !px-3 !text-sm" />
                         </div>
                         {isAnalyticsDateInvalid && <div className="text-[var(--text-orange)] text-xs font-bold mt-2">截止日期不能早於起始日期！</div>}
                         
@@ -1283,7 +1286,7 @@
                                     
                                     <div className="bg-white p-5 rounded-[24px] shadow-sm border border-gray-100 space-y-4">
                                         <div>
-                                            <label className="font-black mb-2 block text-sm text-[var(--bubble-text)]/60">參與成員 (可多選)</label>
+                                            <label className="font-black mb-2 block text-sm text-[var(--bubble-text)]/60">參與成員</label>
                                             <div className="flex flex-wrap gap-2">
                                                 {members.map(m => (
                                                     <button key={m.id} type="button" onClick={() => {
@@ -1303,10 +1306,10 @@
                                         </div>
                                         <div className="pt-2">
                                             <label className="font-black mb-2 block text-sm text-[var(--bubble-text)]/60">專案日期區間</label>
-                                            <div className="flex items-center gap-2">
-                                                <input type="date" value={startDate} onChange={e=>setStartDate(e.target.value)} className="w-full !bg-white" />
+                                            <div className="grid grid-cols-[1fr_auto_1fr] gap-2 items-center">
+                                                <input type="date" value={startDate} onChange={e=>setStartDate(e.target.value)} className="w-full min-w-0 !bg-white !px-2" />
                                                 <span className="font-black text-gray-300">→</span>
-                                                <input type="date" value={endDate} onChange={e=>setEndDate(e.target.value)} className="w-full !bg-white" />
+                                                <input type="date" value={endDate} onChange={e=>setEndDate(e.target.value)} className="w-full min-w-0 !bg-white !px-2" />
                                             </div>
                                             {isProjectDateInvalid && <div className="text-[var(--text-orange)] text-sm font-bold mt-2">結束日期不能早於起始日期！</div>}
                                         </div>
