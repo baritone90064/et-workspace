@@ -329,6 +329,63 @@
             });
         };
 
+        const getMonthEndDateString = (year, month) => {
+            const end = new Date(Number(year), Number(month), 0);
+            const yyyy = end.getFullYear();
+            const mm = String(end.getMonth() + 1).padStart(2, '0');
+            const dd = String(end.getDate()).padStart(2, '0');
+            return `${yyyy}-${mm}-${dd}`;
+        };
+
+        const normalizeProjectDate = (value) => {
+            if (!value) return '';
+            const text = String(value).trim();
+            const ymd = text.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/);
+            if (ymd) return `${ymd[1]}-${String(ymd[2]).padStart(2, '0')}-${String(ymd[3]).padStart(2, '0')}`;
+            const compact = text.match(/^(\d{4})(\d{2})(\d{2})$/);
+            if (compact) return `${compact[1]}-${compact[2]}-${compact[3]}`;
+            return text.length >= 10 ? text.substring(0, 10) : text;
+        };
+
+        const getProjectDateRange = (project) => {
+            const start = normalizeProjectDate(project.startDate || project.endDate);
+            const end = normalizeProjectDate(project.endDate || project.startDate);
+            if (!start || !end) return null;
+            return start <= end ? { start, end } : { start: end, end: start };
+        };
+
+        const projectOverlapsDateRange = (project, rangeStart, rangeEnd) => {
+            const range = getProjectDateRange(project);
+            if (!range) return false;
+            return range.start <= rangeEnd && range.end >= rangeStart;
+        };
+
+        const projectMatchesYearMonth = (project, yearFilter, monthFilter) => {
+            if (yearFilter === 'all' && monthFilter === 'all') return true;
+            const range = getProjectDateRange(project);
+            if (!range) return false;
+
+            if (yearFilter !== 'all') {
+                const rangeStart = monthFilter !== 'all' ? `${yearFilter}-${monthFilter}-01` : `${yearFilter}-01-01`;
+                const rangeEnd = monthFilter !== 'all' ? getMonthEndDateString(yearFilter, monthFilter) : `${yearFilter}-12-31`;
+                return range.start <= rangeEnd && range.end >= rangeStart;
+            }
+
+            if (monthFilter !== 'all') {
+                const targetMonth = Number(monthFilter);
+                const start = new Date(`${range.start}T00:00:00`);
+                const end = new Date(`${range.end}T00:00:00`);
+                if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return false;
+                const cursor = new Date(start.getFullYear(), start.getMonth(), 1);
+                const endCursor = new Date(end.getFullYear(), end.getMonth(), 1);
+                while (cursor <= endCursor) {
+                    if (cursor.getMonth() + 1 === targetMonth) return true;
+                    cursor.setMonth(cursor.getMonth() + 1);
+                }
+            }
+            return false;
+        };
+
         const LAST_DAILY_OWNER_KEY = 'etWorkspaceLastDailyOwner';
         const getSavedDailyOwner = () => {
             try { return localStorage.getItem(LAST_DAILY_OWNER_KEY) || ''; }
@@ -401,6 +458,9 @@
             const [dailySort, setDailySort] = useState('desc'); 
             const [dailyMonthFilter, setDailyMonthFilter] = useState(getCurrentMonthString()); 
             const [projectSort, setProjectSort] = useState('desc'); 
+            const [projectKeyword, setProjectKeyword] = useState('');
+            const [projectYearFilter, setProjectYearFilter] = useState('all');
+            const [projectMonthFilter, setProjectMonthFilter] = useState('all');
             
             // --- Analytics Range & Additional Filters States ---
             const [analyticsStart, setAnalyticsStart] = useState(getMonthDateRange(getCurrentMonthString()).start);
@@ -825,6 +885,31 @@
             const switchProjectSubTab = (tab) => {
                 setProjectSubTab(tab);
                 setExpandedProject({});
+            };
+
+            const handleProjectYearChange = (value) => {
+                setProjectYearFilter(value);
+                setSelectedCalDate(null);
+                if (value !== 'all') {
+                    const month = projectMonthFilter !== 'all' ? Number(projectMonthFilter) - 1 : currentCalMonth.getMonth();
+                    setCurrentCalMonth(new Date(Number(value), month, 1));
+                }
+            };
+
+            const handleProjectMonthChange = (value) => {
+                setProjectMonthFilter(value);
+                setSelectedCalDate(null);
+                if (value !== 'all') {
+                    const year = projectYearFilter !== 'all' ? Number(projectYearFilter) : currentCalMonth.getFullYear();
+                    setCurrentCalMonth(new Date(year, Number(value) - 1, 1));
+                }
+            };
+
+            const clearProjectFilters = () => {
+                setProjectKeyword('');
+                setProjectYearFilter('all');
+                setProjectMonthFilter('all');
+                setSelectedCalDate(null);
             };
 
             const toggleProjectCompleted = async (t) => {
@@ -1257,22 +1342,63 @@
                 return displayDaily.reduce((sum, d) => sum + (parseFloat(d.amount) || 0), 0);
             }, [displayDaily]);
 
+            const availableProjectYears = useMemo(() => {
+                const years = new Set();
+                tasks.forEach(t => {
+                    const range = getProjectDateRange(t);
+                    if (!range) return;
+                    const startYear = Number(range.start.substring(0, 4));
+                    const endYear = Number(range.end.substring(0, 4));
+                    if (Number.isNaN(startYear) || Number.isNaN(endYear)) return;
+                    for (let y = startYear; y <= endYear; y++) years.add(y);
+                });
+                return Array.from(years).sort((a, b) => b - a);
+            }, [tasks]);
+
+            const hasProjectFilters = projectKeyword.trim() || projectYearFilter !== 'all' || projectMonthFilter !== 'all' || selectedCalDate;
+
             const displayProjects = useMemo(() => {
                 let filtered = tasks.filter(t => projectSubTab === 'active' ? !t.completed : t.completed);
+
+                if (projectYearFilter !== 'all' || projectMonthFilter !== 'all') {
+                    filtered = filtered.filter(t => projectMatchesYearMonth(t, projectYearFilter, projectMonthFilter));
+                }
+
                 if (selectedCalDate) {
                     filtered = filtered.filter(t => {
-                        if (!t.startDate) return false;
-                        const s = t.startDate;
-                        const e = t.endDate || t.startDate;
-                        return selectedCalDate >= s && selectedCalDate <= e;
+                        if (!t.startDate && !t.endDate) return false;
+                        return projectOverlapsDateRange(t, selectedCalDate, selectedCalDate);
                     });
                 }
+
+                const keyword = projectKeyword.trim().toLowerCase();
+                if (keyword) {
+                    filtered = filtered.filter(t => {
+                        const ownersText = (t.owners || []).join(' ');
+                        const linksText = (t.links || []).map(l => `${l.label || ''} ${l.url || ''}`).join(' ');
+                        const checklistText = (t.checklist || []).map(item => item.text || '').join(' ');
+                        const expenseText = (t.expenses || []).map(e => `${e.date || ''} ${e.amount || ''} ${e.item || ''} ${e.desc || ''}`).join(' ');
+                        const searchableText = [
+                            t.text,
+                            t.category,
+                            ownersText,
+                            t.note,
+                            t.startDate,
+                            t.endDate,
+                            linksText,
+                            checklistText,
+                            expenseText
+                        ].filter(Boolean).join(' ').toLowerCase();
+                        return searchableText.includes(keyword);
+                    });
+                }
+
                 filtered.sort((a, b) => {
                     const dateA = a.startDate || a.createdAt || ''; const dateB = b.startDate || b.createdAt || '';
                     return projectSort === 'desc' ? dateB.localeCompare(dateA) : dateA.localeCompare(dateB);
                 });
                 return filtered;
-            }, [tasks, projectSubTab, projectSort, selectedCalDate]);
+            }, [tasks, projectSubTab, projectSort, selectedCalDate, projectKeyword, projectYearFilter, projectMonthFilter]);
             
             const calDays = useMemo(() => {
                 const year = currentCalMonth.getFullYear();
@@ -1284,12 +1410,7 @@
                 for (let i = 0; i < firstDay; i++) days.push(null);
                 for (let i = 1; i <= daysInMonth; i++) {
                     const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
-                    const dayTasks = tasks.filter(t => {
-                        if (!t.startDate) return false;
-                        const s = t.startDate;
-                        const e = t.endDate || t.startDate;
-                        return dateStr >= s && dateStr <= e;
-                    });
+                    const dayTasks = tasks.filter(t => projectOverlapsDateRange(t, dateStr, dateStr));
                     days.push({ day: i, dateStr, tasks: dayTasks });
                 }
                 return days;
@@ -1518,8 +1639,50 @@
                         </button>
                     </div>
 
+                    <div className="bubble-card bg-white p-3 mx-2">
+                        <div className="flex items-center gap-2">
+                            <Icon name="search" size={18} className="text-[var(--bubble-text)]/40" />
+                            <input
+                                type="text"
+                                value={projectKeyword}
+                                onChange={e=>setProjectKeyword(e.target.value)}
+                                placeholder="搜尋專案名稱、類別、成員、備註、費用..."
+                                className="flex-grow min-w-0 !max-w-full !py-2 !px-3 !text-sm"
+                            />
+                            {projectKeyword && (
+                                <button onClick={()=>setProjectKeyword('')} className="bg-gray-100 text-gray-500 p-2 rounded-xl transition-all hover:bg-gray-200" title="清除搜尋"><Icon name="x" size={16}/></button>
+                            )}
+                        </div>
+                        <div className="grid grid-cols-[1fr_1fr_auto] gap-2 mt-3">
+                            <select value={projectYearFilter} onChange={e=>handleProjectYearChange(e.target.value)} className="w-full min-w-0 !max-w-full !py-2 !px-3 !text-sm">
+                                <option value="all">年份</option>
+                                {availableProjectYears.map(y => <option key={y} value={String(y)}>{y}</option>)}
+                            </select>
+                            <select value={projectMonthFilter} onChange={e=>handleProjectMonthChange(e.target.value)} className="w-full min-w-0 !max-w-full !py-2 !px-3 !text-sm">
+                                <option value="all">月份</option>
+                                {Array.from({ length: 12 }, (_, i) => {
+                                    const mm = String(i + 1).padStart(2, '0');
+                                    return <option key={mm} value={mm}>{i + 1}月</option>;
+                                })}
+                            </select>
+                            <button
+                                onClick={clearProjectFilters}
+                                disabled={!hasProjectFilters}
+                                className="bubble-btn btn-outline bg-white !p-3 shadow-sm border-none h-full"
+                                title="清除篩選"
+                            >
+                                <Icon name="rotate-ccw" size={18} />
+                            </button>
+                        </div>
+                        {hasProjectFilters && (
+                            <div className="mt-2 px-2 text-[12px] font-bold text-[var(--bubble-text)]/45">
+                                篩選結果：{displayProjects.length} 個專案
+                            </div>
+                        )}
+                    </div>
+
                     <div className="space-y-4">
-                        {displayProjects.length === 0 && <p className="text-center font-bold text-[var(--bubble-text)]/40 py-10">尚無專案</p>}
+                        {displayProjects.length === 0 && <p className="text-center font-bold text-[var(--bubble-text)]/40 py-10">{hasProjectFilters ? '找不到符合篩選的專案' : '尚無專案'}</p>}
                         {displayProjects.map(t => {
                             const isExpanded = expandedProject[t.id];
                             const total = calculateTaskTotal(t);
