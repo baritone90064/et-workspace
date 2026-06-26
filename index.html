@@ -281,7 +281,9 @@
             const [dailyItem, setDailyItem] = useState('');
             const [dailyDesc, setDailyDesc] = useState('');
             const [dailyOwner, setDailyOwner] = useState('');
-            const [dailyEditingId, setDailyEditingId] = useState(null);
+            
+            // Daily Edit Modal State (取代跳至頂部的設計)
+            const [dailyEditData, setDailyEditData] = useState(null);
 
             // Project Form
             const [isProjectFormOpen, setIsProjectFormOpen] = useState(false);
@@ -294,7 +296,7 @@
             const [endDate, setEndDate] = useState('');
             const [links, setLinks] = useState([]);
             const [images, setImages] = useState([]); 
-            const [isUploadingImage, setIsUploadingImage] = useState(false); // 新增圖片上傳狀態
+            const [isUploadingImage, setIsUploadingImage] = useState(false);
 
             const isProjectDateInvalid = startDate && endDate && endDate < startDate;
 
@@ -307,7 +309,7 @@
             const [projExpAmount, setProjExpAmount] = useState('');
             const [projExpItem, setProjExpItem] = useState('');
             const [projExpDesc, setProjExpDesc] = useState('');
-            const [projExpEditingIdx, setProjExpEditingIdx] = useState(null); // 專案費用編輯狀態
+            const [projExpEditingIdx, setProjExpEditingIdx] = useState(null);
             
             // Project Checklist State 
             const [newChecklistText, setNewChecklistText] = useState({});
@@ -327,11 +329,9 @@
                 if (!user) return;
                 const path = db.collection('artifacts').doc(appId).collection('public').doc('data');
                 
-                // 修復清單亂跳的問題：加入第二排序條件 `doc.id`，確保 order 相當時也能保持固定順序
                 const sortConfig = (a, b) => {
                     const orderDiff = (a.order ?? 0) - (b.order ?? 0);
                     if (orderDiff !== 0) return orderDiff;
-                    // 如果 order 相同，使用文件 ID 來穩定排序
                     return a.id.localeCompare(b.id);
                 };
 
@@ -375,33 +375,28 @@
                 setIsProcessing(true);
                 try {
                     const data = {
-                        date: dailyDate, amount: parseFloat(dailyAmount), item: dailyItem, desc: dailyDesc, owner: dailyOwner, updatedAt: new Date().toISOString()
+                        date: dailyDate, amount: parseFloat(dailyAmount), item: dailyItem, desc: dailyDesc, owner: dailyOwner, updatedAt: new Date().toISOString(), createdAt: new Date().toISOString()
                     };
-                    if (dailyEditingId) {
-                        await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('dailyExpenses').doc(dailyEditingId).update(data);
-                        setDailyEditingId(null);
-                    } else {
-                        data.createdAt = new Date().toISOString();
-                        await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('dailyExpenses').add(data);
-                    }
+                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('dailyExpenses').add(data);
                     setDailyAmount(''); setDailyDesc('');
                 } catch (err) {}
                 setIsProcessing(false);
             };
 
-            const editDailyExpense = (d) => {
-                setDailyDate(d.date || new Date().toISOString().split('T')[0]);
-                setDailyAmount(d.amount);
-                setDailyItem(d.item);
-                setDailyDesc(d.desc || '');
-                setDailyOwner(d.owner);
-                setDailyEditingId(d.id);
-                window.scrollTo({ top: 0, behavior: 'smooth' });
+            const submitDailyEdit = async (e) => {
+                e.preventDefault();
+                if (!dailyEditData.amount || !dailyEditData.item || isProcessing) return;
+                setIsProcessing(true);
+                try {
+                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('dailyExpenses').doc(dailyEditData.id).update({
+                        date: dailyEditData.date, amount: parseFloat(dailyEditData.amount), item: dailyEditData.item, desc: dailyEditData.desc, owner: dailyEditData.owner, updatedAt: new Date().toISOString()
+                    });
+                    setDailyEditData(null);
+                } catch (err) {}
+                setIsProcessing(false);
             };
 
-            // --- 圖片處理與上傳至 Firebase Storage ---
             const uploadImageToStorage = async (base64Str) => {
-                // 產生獨特的檔案名稱，避免覆蓋
                 const fileName = `images/${Date.now()}_${Math.random().toString(36).substr(2, 9)}.jpg`;
                 const storageRef = storage.ref().child(fileName);
                 const snapshot = await storageRef.putString(base64Str, 'data_url');
@@ -415,7 +410,7 @@
                     reader.onload = async (re) => {
                         try {
                             const compressed = await compressImage(re.target.result);
-                            const url = await uploadImageToStorage(compressed); // 傳到 Storage
+                            const url = await uploadImageToStorage(compressed); 
                             resolve(url);
                         } catch (error) {
                             reject(error);
@@ -432,7 +427,6 @@
                 
                 setIsUploadingImage(true);
                 try {
-                    // Promise.all 同時上傳多張圖片
                     const urls = await Promise.all(files.map(processAndUploadFile));
                     setImages(prev => [...prev, ...urls]);
                 } catch (error) {
@@ -441,7 +435,6 @@
                 } finally {
                     setIsUploadingImage(false);
                 }
-                // 清空 input 讓下次可以選同樣的圖
                 e.target.value = '';
             };
 
@@ -875,7 +868,7 @@
                 <div className="animate-in fade-in duration-300 max-w-xl mx-auto space-y-6">
                     <div className="flex items-center gap-3 px-2 mb-2">
                         <div className="bg-[var(--pastel-blue)] p-2 rounded-2xl"><Icon name="wallet" size={24} className="text-[var(--text-blue)]" /></div>
-                        <h1 className="text-3xl font-black tracking-tight text-[var(--bubble-text)]">日常流水帳</h1>
+                        <h1 className="text-2xl font-black tracking-tight text-[var(--bubble-text)]">日常流水帳</h1>
                     </div>
                     
                     <form onSubmit={submitDailyExpense} className="bubble-card p-6 space-y-4 bg-white border-2 border-[var(--pastel-blue)]/30">
@@ -892,20 +885,17 @@
                                 {members.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}
                             </select>
                         </div>
-                        {/* 解決按鈕超出版面：改成 flex-col 在手機折行顯示，按鈕在下方平均分配寬度 */}
                         <div className="flex flex-col sm:flex-row gap-3">
                             <input type="text" placeholder="寫點備註..." value={dailyDesc} onChange={e=>setDailyDesc(e.target.value)} className="w-full sm:flex-grow" />
                             <div className="flex gap-3 w-full sm:w-auto">
-                                {dailyEditingId && <button type="button" onClick={() => {setDailyEditingId(null); setDailyAmount(''); setDailyDesc('');}} className="bubble-btn btn-outline flex-1 sm:flex-none">取消</button>}
-                                <button type="submit" disabled={isProcessing} className="bubble-btn btn-primary flex-1 sm:flex-none px-8">
-                                    {isProcessing ? <Icon name="loader" className="animate-spin" /> : (dailyEditingId ? "儲存修改" : "記一筆")}
+                                <button type="submit" disabled={isProcessing} className="bubble-btn btn-primary flex-1 sm:flex-none px-8 whitespace-nowrap">
+                                    {isProcessing ? <Icon name="loader" className="animate-spin" /> : "記一筆"}
                                 </button>
                             </div>
                         </div>
                     </form>
 
                     <div className="bubble-card bg-white/60 p-4">
-                        {/* 調整總計金額位置：放在所有月份下拉選單的下方靠右 */}
                         <div className="flex justify-between items-start px-2 mb-4">
                             <h3 className="font-bold text-lg text-[var(--bubble-text)]/80 flex items-center gap-2 mt-1">
                                 <Icon name="list" size={18} /> 消費明細
@@ -941,10 +931,12 @@
                                     </div>
                                     <div className="flex flex-col sm:flex-row items-end sm:items-center gap-2 ml-auto pl-2">
                                         <div className="flex gap-1 sm:opacity-0 group-hover:opacity-100 transition-opacity order-2 sm:order-1">
-                                            <button onClick={()=>editDailyExpense(d)} className="bg-[var(--pastel-blue)]/30 text-[var(--text-blue)] p-1.5 rounded-xl transition-all hover:bg-[var(--pastel-blue)]"><Icon name="edit-2" size={16} /></button>
+                                            {/* 改為開啟彈窗 (Modal) 來編輯，不再需要畫面捲動回上方 */}
+                                            <button onClick={()=>setDailyEditData({...d})} className="bg-[var(--pastel-blue)]/30 text-[var(--text-blue)] p-1.5 rounded-xl transition-all hover:bg-[var(--pastel-blue)]"><Icon name="edit-2" size={16} /></button>
                                             <button onClick={()=>showConfirm('刪除花費', '確定要刪除這筆紀錄嗎？', ()=>db.collection('artifacts').doc(appId).collection('public').doc('data').collection('dailyExpenses').doc(d.id).delete())} className="bg-[var(--pastel-orange)]/30 text-[var(--text-orange)] p-1.5 rounded-xl transition-all hover:bg-[var(--pastel-orange)]"><Icon name="trash-2" size={16} /></button>
                                         </div>
-                                        <span className="font-black text-xl text-[var(--bubble-text)] text-right order-1 sm:order-2">${parseFloat(d.amount).toLocaleString()}</span>
+                                        {/* 明細清單右邊數字調小： text-xl 改為 text-lg */}
+                                        <span className="font-black text-lg text-[var(--bubble-text)] text-right order-1 sm:order-2">${parseFloat(d.amount).toLocaleString()}</span>
                                     </div>
                                 </div>
                             ))}
@@ -958,7 +950,7 @@
                     <div className="flex justify-between items-center px-2">
                         <div className="flex items-center gap-3">
                             <div className="bg-[var(--pastel-mint)] p-2 rounded-2xl"><Icon name="folder" size={24} className="text-[var(--text-mint)]" /></div>
-                            <h1 className="text-3xl font-black tracking-tight">專案資料夾</h1>
+                            <h1 className="text-2xl font-black tracking-tight">專案資料夾</h1>
                         </div>
                         <button onClick={()=>{resetProjectForm(); setIsProjectFormOpen(true);}} className="bubble-btn btn-mint !px-5"><Icon name="plus" size={18}/> 新增</button>
                     </div>
@@ -1095,7 +1087,6 @@
                                                                     <div className="font-black text-[15px] text-slate-700">{e.desc || '無備註'} <span className="ml-2 font-black">{e.item}</span></div>
                                                                     <div className="font-bold text-[12px] text-[var(--bubble-text)]/40 mt-1">{e.date}</div>
                                                                 </div>
-                                                                {/* 專案費用明細：加入編輯按鈕並比照日常記帳的響應式排版 */}
                                                                 <div className="flex flex-col sm:flex-row items-end sm:items-center gap-2 ml-auto pl-2">
                                                                     <div className="flex gap-1 sm:opacity-0 group-hover:opacity-100 transition-opacity order-2 sm:order-1">
                                                                         <button onClick={()=>openExpenseModal(t, idx)} className="bg-[var(--pastel-blue)]/30 text-[var(--text-blue)] p-1.5 rounded-xl transition-all hover:bg-[var(--pastel-blue)]"><Icon name="edit-2" size={16} /></button>
@@ -1124,7 +1115,7 @@
                 <div className="animate-in fade-in duration-300 max-w-xl mx-auto space-y-6">
                     <div className="flex items-center gap-3 px-2 mb-2">
                         <div className="bg-[var(--pastel-yellow)] p-2 rounded-2xl"><Icon name="pie-chart" size={24} className="text-[var(--text-yellow)]" /></div>
-                        <h1 className="text-3xl font-black tracking-tight">統計分析</h1>
+                        <h1 className="text-2xl font-black tracking-tight">統計分析</h1>
                     </div>
                     
                     {/* 篩選區間與條件設定 */}
@@ -1151,7 +1142,6 @@
 
                     <div className="bubble-card p-8 text-center bg-white border-2 border-[var(--pastel-yellow)]/40">
                         <p className="font-bold text-[15px] text-[var(--bubble-text)]/60 mb-2">總計花費</p>
-                        {/* 總計花費：字體從 text-5xl 調小到 text-3xl */}
                         <p className="text-3xl font-black tracking-tighter text-[var(--text-yellow)] drop-shadow-sm">${analyticsData.totalExpense.toLocaleString()}</p>
                     </div>
 
@@ -1238,7 +1228,7 @@
                             <div className="animate-in fade-in duration-300 max-w-xl mx-auto space-y-4">
                                 <div className="flex items-center gap-3 px-2 mb-6">
                                     <div className="bg-[var(--pastel-gray)] p-2 rounded-2xl"><Icon name="settings" size={24} className="text-gray-700" /></div>
-                                    <h1 className="text-3xl font-black tracking-tight">設定管理</h1>
+                                    <h1 className="text-2xl font-black tracking-tight">設定管理</h1>
                                 </div>
                                 {renderSettingsList("參與成員", "members", members)}
                                 {renderSettingsList("專案類別", "categories", categories)}
@@ -1294,6 +1284,35 @@
                                     <button onClick={()=>setInputDialog({isOpen:false})} className="bubble-btn bg-white/40 text-[var(--text-blue)] flex-1 py-3 hover:bg-white/60">取消</button>
                                     <button onClick={()=>{ if(inputDialog.value.trim()){ inputDialog.onConfirm(inputDialog.value.trim()); setInputDialog({isOpen:false}); } }} className="bubble-btn bg-white text-[var(--text-blue)] flex-1 py-3 shadow-lg">確認儲存</button>
                                 </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 日常修改 Modal (新加入，讓使用者編輯時不會失去原有位置) */}
+                    {dailyEditData && (
+                        <div className="modal-overlay" onClick={() => setDailyEditData(null)}>
+                            <div className="bubble-card bg-white w-full max-w-sm overflow-hidden animate-in zoom-in-95 duration-200" onClick={e=>e.stopPropagation()}>
+                                <div className="p-4 border-b-2 border-gray-50 flex justify-between items-center bg-[var(--pastel-blue)]/30">
+                                    <h3 className="font-black text-lg text-[var(--text-blue)]">編輯日常流水帳</h3>
+                                    <button onClick={() => setDailyEditData(null)} className="p-1.5 bg-white rounded-full text-gray-500 hover:bg-gray-100"><Icon name="x" size={18}/></button>
+                                </div>
+                                <form onSubmit={submitDailyEdit} className="p-6 space-y-4">
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                        <input type="date" value={dailyEditData.date} onChange={e=>setDailyEditData({...dailyEditData, date: e.target.value})} required className="w-full" />
+                                        <input type="number" placeholder="金額 $" value={dailyEditData.amount} onChange={e=>setDailyEditData({...dailyEditData, amount: e.target.value})} required className="w-full font-black text-xl text-[var(--text-blue)]" />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <select value={dailyEditData.item} onChange={e=>setDailyEditData({...dailyEditData, item: e.target.value})} required>
+                                            <option value="">選擇分類...</option>
+                                            {expenseItems.map(i => <option key={i.id} value={i.name}>{i.name}</option>)}
+                                        </select>
+                                        <select value={dailyEditData.owner} onChange={e=>setDailyEditData({...dailyEditData, owner: e.target.value})} required>
+                                            {members.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}
+                                        </select>
+                                    </div>
+                                    <input placeholder="備註 (選填)..." value={dailyEditData.desc} onChange={e=>setDailyEditData({...dailyEditData, desc: e.target.value})} className="w-full" />
+                                    <button type="submit" disabled={isProcessing} className="bubble-btn btn-primary w-full py-3 mt-4">儲存修改</button>
+                                </form>
                             </div>
                         </div>
                     )}
@@ -1401,7 +1420,7 @@
                         </div>
                     )}
 
-                    {/* 專案記單筆花費 Modal */}
+                    {/* 專案記單筆花費 Modal (降一列垂直排列解決手機板破圖) */}
                     {expenseModalTask && (
                         <div className="modal-overlay" onClick={() => setExpenseModalTask(null)}>
                             <div className="bubble-card bg-white w-full max-w-sm overflow-hidden animate-in zoom-in-95 duration-200" onClick={e=>e.stopPropagation()}>
@@ -1410,9 +1429,9 @@
                                     <button onClick={() => setExpenseModalTask(null)} className="p-1.5 bg-white rounded-full text-gray-500 hover:bg-gray-100"><Icon name="x" size={18}/></button>
                                 </div>
                                 <form onSubmit={submitProjectExpense} className="p-6 space-y-4">
-                                    <div className="grid grid-cols-2 gap-3">
-                                        <input type="date" value={projExpDate} onChange={e=>setProjExpDate(e.target.value)} required />
-                                        <input type="number" placeholder="金額 $" value={projExpAmount} onChange={e=>setProjExpAmount(e.target.value)} required className="font-black text-xl text-[var(--text-mint)]" />
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                        <input type="date" value={projExpDate} onChange={e=>setProjExpDate(e.target.value)} required className="w-full" />
+                                        <input type="number" placeholder="金額 $" value={projExpAmount} onChange={e=>setProjExpAmount(e.target.value)} required className="w-full font-black text-xl text-[var(--text-mint)]" />
                                     </div>
                                     <select className="w-full" value={projExpItem} onChange={e=>setProjExpItem(e.target.value)} required>
                                         <option value="">選擇分類...</option>
