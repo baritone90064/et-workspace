@@ -3,7 +3,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>E&T Workspace</title>
+    <title>T&amp;E LifeLog</title>
+    <meta name="application-name" content="T&amp;E LifeLog">
+    <meta name="apple-mobile-web-app-title" content="T&amp;E LifeLog">
+    <meta name="theme-color" content="#F0F4F8">
+    <!-- T&E LifeLog App Icons -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <link rel="apple-touch-icon" sizes="180x180" href="TE_LifeLog_icon.png">
+    <link rel="apple-touch-icon" sizes="152x152" href="TE_LifeLog_icon.png">
+    <link rel="apple-touch-icon" sizes="120x120" href="TE_LifeLog_icon.png">
+    <link rel="icon" type="image/png" href="TE_LifeLog_icon.png">
+    <link rel="shortcut icon" href="TE_LifeLog_icon.png">
+    <!-- /T&E LifeLog App Icons -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -46,15 +58,24 @@
             --shadow-float: 0 15px 30px -5px rgba(168, 216, 234, 0.6);
         }
 
+        html {
+            font-size: 15px; /* 取代 body zoom，讓整體比例變小但不破壞 iPhone 寬度計算 */
+            -webkit-text-size-adjust: 100%;
+        }
+
+        *, *::before, *::after { box-sizing: border-box; }
+
         body { 
             font-family: 'Nunito', 'Noto Sans TC', sans-serif;
             background-color: var(--bubble-bg);
             color: var(--bubble-text);
             -webkit-font-smoothing: antialiased;
             background-image: radial-gradient(var(--pastel-blue) 1.5px, transparent 1.5px);
-            background-size: 30px 30px;
+            background-size: 28px 28px;
             background-attachment: fixed;
-            zoom: 0.80; /* 將畫面整體縮小為 80% */
+            margin: 0;
+            min-width: 0;
+            overflow-x: hidden; /* iPhone 防止原生日期欄位把畫面撐出橫向捲軸 */
         }
 
         .no-scrollbar::-webkit-scrollbar { display: none; }
@@ -94,6 +115,19 @@
             background: #FFFFFF !important;
             border-color: var(--pastel-blue) !important;
             box-shadow: 0 0 0 4px rgba(168, 216, 234, 0.3) !important;
+        }
+
+        input[type="date"] {
+            width: 100% !important;
+            min-width: 0 !important;
+            max-width: 100% !important;
+            -webkit-appearance: none;
+            appearance: none;
+        }
+
+        input[type="date"]::-webkit-date-and-time-value {
+            min-width: 0;
+            text-align: left;
         }
 
         /* 膠囊按鈕 */
@@ -176,6 +210,52 @@
             transform: scale(1.1);
             box-shadow: 0 4px 10px rgba(168, 216, 234, 0.5);
         }
+
+        .modal-panel {
+            width: min(100%, 420px) !important;
+            max-width: min(100%, 420px) !important;
+            margin-left: 0 !important;
+            margin-right: 0 !important;
+        }
+
+        .modal-panel-wide {
+            width: min(100%, 560px) !important;
+            max-width: min(100%, 560px) !important;
+            margin-left: 0 !important;
+            margin-right: 0 !important;
+        }
+
+        @media (max-width: 480px) {
+            html { font-size: 14px; }
+            body { background-size: 24px 24px; }
+            .bubble-card { border-radius: 24px; }
+            input, select, textarea {
+                padding: 10px 12px !important;
+                font-size: 15px !important;
+                border-radius: 16px !important;
+            }
+            .bubble-btn {
+                padding: 10px 16px;
+                font-size: 15px;
+            }
+            .modal-overlay {
+                padding: 12px;
+                align-items: center;
+            }
+            .modal-panel, .modal-panel-wide {
+                width: calc(100vw - 24px) !important;
+                max-width: calc(100vw - 24px) !important;
+                margin-left: 0 !important;
+                margin-right: 0 !important;
+            }
+            .mobile-stack {
+                grid-template-columns: minmax(0, 1fr) !important;
+            }
+            .bottom-nav {
+                height: calc(76px + env(safe-area-inset-bottom));
+                padding-bottom: env(safe-area-inset-bottom);
+            }
+        }
     </style>
 </head>
 <body>
@@ -212,6 +292,53 @@
 
         const { useState, useEffect, useMemo, useRef } = React;
 
+        const getLocalDateString = () => {
+            const now = new Date();
+            const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
+            return local.toISOString().split('T')[0];
+        };
+
+        const getCurrentMonthString = () => getLocalDateString().substring(0, 7);
+
+        const getMonthDateRange = (monthKey) => {
+            const [year, month] = monthKey.split('-').map(Number);
+            const startDate = new Date(year, month - 1, 1);
+            const endDate = new Date(year, month, 1);
+            const toLocalISO = (d) => {
+                const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+                return local.toISOString().split('T')[0];
+            };
+            return { start: toLocalISO(startDate), end: toLocalISO(endDate) };
+        };
+
+        const getNextDateString = (dateStr) => {
+            if (!dateStr) return '';
+            const d = new Date(`${dateStr}T00:00:00`);
+            d.setDate(d.getDate() + 1);
+            const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+            return local.toISOString().split('T')[0];
+        };
+
+        const generateRecentMonths = (count = 36) => {
+            const [year, month] = getCurrentMonthString().split('-').map(Number);
+            return Array.from({ length: count }, (_, index) => {
+                const d = new Date(year, month - 1 - index, 1);
+                const yyyy = d.getFullYear();
+                const mm = String(d.getMonth() + 1).padStart(2, '0');
+                return `${yyyy}-${mm}`;
+            });
+        };
+
+        const LAST_DAILY_OWNER_KEY = 'etWorkspaceLastDailyOwner';
+        const getSavedDailyOwner = () => {
+            try { return localStorage.getItem(LAST_DAILY_OWNER_KEY) || ''; }
+            catch (e) { return ''; }
+        };
+        const saveDailyOwner = (owner) => {
+            try { if (owner) localStorage.setItem(LAST_DAILY_OWNER_KEY, owner); }
+            catch (e) {}
+        };
+
         const Icon = ({ name, size = 20, className = "" }) => {
             const [svgHtml, setSvgHtml] = useState('');
             useEffect(() => {
@@ -245,9 +372,18 @@
 
         function App() {
             const [user, setUser] = useState(null);
+            const [isInitialLoading, setIsInitialLoading] = useState(true);
+            const [loadedSources, setLoadedSources] = useState({
+                daily: false,
+                tasks: false,
+                categories: false,
+                expenseItems: false,
+                members: false
+            });
             
             // --- Data States ---
             const [dailyExpenses, setDailyExpenses] = useState([]);
+            const [analyticsDailyExpenses, setAnalyticsDailyExpenses] = useState([]);
             const [tasks, setTasks] = useState([]); // Projects
             const [categories, setCategories] = useState([]);
             const [expenseItems, setExpenseItems] = useState([]);
@@ -257,16 +393,18 @@
             const [activeTab, setActiveTab] = useState('daily'); 
             const [projectSubTab, setProjectSubTab] = useState('active'); 
             const [isProcessing, setIsProcessing] = useState(false);
+            const [isDailyLoading, setIsDailyLoading] = useState(false);
+            const [isAnalyticsLoading, setIsAnalyticsLoading] = useState(false);
             const chartRefs = useRef({ trend: null, cat: null });
             
             // --- Filter & Sort States ---
             const [dailySort, setDailySort] = useState('desc'); 
-            const [dailyMonthFilter, setDailyMonthFilter] = useState('all'); 
+            const [dailyMonthFilter, setDailyMonthFilter] = useState(getCurrentMonthString()); 
             const [projectSort, setProjectSort] = useState('desc'); 
             
             // --- Analytics Range & Additional Filters States ---
-            const [analyticsStart, setAnalyticsStart] = useState('');
-            const [analyticsEnd, setAnalyticsEnd] = useState('');
+            const [analyticsStart, setAnalyticsStart] = useState(getMonthDateRange(getCurrentMonthString()).start);
+            const [analyticsEnd, setAnalyticsEnd] = useState(getLocalDateString());
             const [analyticsCatFilter, setAnalyticsCatFilter] = useState('all');
             const [analyticsOwnerFilter, setAnalyticsOwnerFilter] = useState('all');
             const [isAnalyticsDateInvalid, setIsAnalyticsDateInvalid] = useState(false);
@@ -280,11 +418,11 @@
             const [inputDialog, setInputDialog] = useState({ isOpen: false, title: '', value: '', placeholder: '', onConfirm: null });
 
             // Daily Form
-            const [dailyDate, setDailyDate] = useState(new Date().toISOString().split('T')[0]);
+            const [dailyDate, setDailyDate] = useState(getLocalDateString());
             const [dailyAmount, setDailyAmount] = useState('');
             const [dailyItem, setDailyItem] = useState('');
             const [dailyDesc, setDailyDesc] = useState('');
-            const [dailyOwner, setDailyOwner] = useState('');
+            const [dailyOwner, setDailyOwner] = useState(() => getSavedDailyOwner());
             
             // Daily Edit Modal State (取代跳至頂部的設計)
             const [dailyEditData, setDailyEditData] = useState(null);
@@ -309,7 +447,7 @@
             const [expenseModalTask, setExpenseModalTask] = useState(null);
             
             // Project Single Expense
-            const [projExpDate, setProjExpDate] = useState(new Date().toISOString().split('T')[0]);
+            const [projExpDate, setProjExpDate] = useState(getLocalDateString());
             const [projExpAmount, setProjExpAmount] = useState('');
             const [projExpItem, setProjExpItem] = useState('');
             const [projExpDesc, setProjExpDesc] = useState('');
@@ -318,12 +456,25 @@
             // Project Checklist State 
             const [newChecklistText, setNewChecklistText] = useState({});
 
+            const markSourceLoaded = (key) => {
+                setLoadedSources(prev => prev[key] ? prev : ({ ...prev, [key]: true }));
+            };
+
+            const handleDailyOwnerChange = (e) => {
+                const owner = e.target.value;
+                setDailyOwner(owner);
+                saveDailyOwner(owner);
+            };
+
             useEffect(() => {
                 const initAuth = async () => {
                     try {
                         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) await auth.signInWithCustomToken(__initial_auth_token);
                         else await auth.signInAnonymously();
-                    } catch (err) {}
+                    } catch (err) {
+                        console.error('登入失敗:', err);
+                        setIsInitialLoading(false);
+                    }
                 };
                 initAuth();
                 return auth.onAuthStateChanged(setUser);
@@ -331,6 +482,9 @@
 
             useEffect(() => {
                 if (!user) return;
+                setIsInitialLoading(true);
+                setLoadedSources({ daily: false, tasks: false, categories: false, expenseItems: false, members: false });
+
                 const path = db.collection('artifacts').doc(appId).collection('public').doc('data');
                 
                 const sortConfig = (a, b) => {
@@ -339,35 +493,124 @@
                     return a.id.localeCompare(b.id);
                 };
 
-                const unsubDaily = path.collection('dailyExpenses').onSnapshot(snap => setDailyExpenses(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
-                const unsubTasks = path.collection('tasks').onSnapshot(snap => setTasks(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+                // 專案資料目前仍保留即時監聽：專案筆數通常遠少於日常流水帳，且行事曆/進行中/已結束需要即時同步。
+                const unsubTasks = path.collection('tasks').onSnapshot(
+                    snap => {
+                        setTasks(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+                        markSourceLoaded('tasks');
+                    },
+                    err => { console.error('讀取專案資料失敗:', err); markSourceLoaded('tasks'); }
+                );
                 
-                const unsubCats = path.collection('categories').onSnapshot(snap => {
-                    let d = snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort(sortConfig);
-                    if (d.length === 0) ['日常', '旅遊', '專案'].forEach((name, i) => path.collection('categories').add({ name, order: i, createdAt: new Date().toISOString() }));
-                    else setCategories(d);
-                });
+                const unsubCats = path.collection('categories').onSnapshot(
+                    snap => {
+                        let d = snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort(sortConfig);
+                        if (d.length === 0) ['日常', '旅遊', '專案'].forEach((name, i) => path.collection('categories').add({ name, order: i, createdAt: new Date().toISOString() }));
+                        else setCategories(d);
+                        markSourceLoaded('categories');
+                    },
+                    err => { console.error('讀取專案類別失敗:', err); markSourceLoaded('categories'); }
+                );
 
-                const unsubExpItems = path.collection('expenseItems').onSnapshot(snap => {
-                    let d = snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort(sortConfig);
-                    if (d.length === 0) ['餐飲', '交通', '購物', '娛樂'].forEach((name, i) => path.collection('expenseItems').add({ name, order: i, createdAt: new Date().toISOString() }));
-                    else setExpenseItems(d);
-                });
+                const unsubExpItems = path.collection('expenseItems').onSnapshot(
+                    snap => {
+                        let d = snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort(sortConfig);
+                        if (d.length === 0) ['餐飲', '交通', '購物', '娛樂'].forEach((name, i) => path.collection('expenseItems').add({ name, order: i, createdAt: new Date().toISOString() }));
+                        else setExpenseItems(d);
+                        markSourceLoaded('expenseItems');
+                    },
+                    err => { console.error('讀取費用分類失敗:', err); markSourceLoaded('expenseItems'); }
+                );
 
-                const unsubMembers = path.collection('members').onSnapshot(snap => {
-                    let d = snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort(sortConfig);
-                    if (d.length === 0) ['Terry', 'Eric'].forEach((name, i) => path.collection('members').add({ name, order: i, createdAt: new Date().toISOString() }));
-                    else setMembers(d);
-                });
+                const unsubMembers = path.collection('members').onSnapshot(
+                    snap => {
+                        let d = snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort(sortConfig);
+                        if (d.length === 0) ['Terry', 'Eric'].forEach((name, i) => path.collection('members').add({ name, order: i, createdAt: new Date().toISOString() }));
+                        else setMembers(d);
+                        markSourceLoaded('members');
+                    },
+                    err => { console.error('讀取成員失敗:', err); markSourceLoaded('members'); }
+                );
 
-                return () => { unsubDaily(); unsubTasks(); unsubCats(); unsubExpItems(); unsubMembers(); };
+                return () => { unsubTasks(); unsubCats(); unsubExpItems(); unsubMembers(); };
             }, [user]);
 
-            useEffect(() => { if (members.length > 0 && !dailyOwner) setDailyOwner(members[0].name); }, [members]);
+            useEffect(() => {
+                if (!user) return;
+                const path = db.collection('artifacts').doc(appId).collection('public').doc('data');
+                let query = path.collection('dailyExpenses');
+
+                if (dailyMonthFilter !== 'all') {
+                    const { start, end } = getMonthDateRange(dailyMonthFilter);
+                    query = query.where('date', '>=', start).where('date', '<', end);
+                }
+
+                setIsDailyLoading(true);
+                setLoadedSources(prev => ({ ...prev, daily: false }));
+
+                const unsubDaily = query.onSnapshot(
+                    snap => {
+                        setDailyExpenses(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+                        setIsDailyLoading(false);
+                        markSourceLoaded('daily');
+                    },
+                    err => {
+                        console.error('讀取日常記帳失敗:', err);
+                        setIsDailyLoading(false);
+                        markSourceLoaded('daily');
+                    }
+                );
+
+                return () => unsubDaily();
+            }, [user, dailyMonthFilter]);
+
+            useEffect(() => {
+                if (user && Object.values(loadedSources).every(Boolean)) setIsInitialLoading(false);
+            }, [user, loadedSources]);
+
+            useEffect(() => {
+                if (members.length === 0) return;
+                const memberNames = members.map(m => m.name);
+                const savedOwner = getSavedDailyOwner();
+                const nextOwner = savedOwner && memberNames.includes(savedOwner)
+                    ? savedOwner
+                    : (dailyOwner && memberNames.includes(dailyOwner) ? dailyOwner : members[0].name);
+
+                if (!dailyOwner || !memberNames.includes(dailyOwner)) {
+                    setDailyOwner(nextOwner);
+                    saveDailyOwner(nextOwner);
+                }
+            }, [members]);
 
             useEffect(() => {
                 setIsAnalyticsDateInvalid(analyticsStart && analyticsEnd && analyticsEnd < analyticsStart);
             }, [analyticsStart, analyticsEnd]);
+
+            useEffect(() => {
+                if (!user || activeTab !== 'analytics') return;
+                if (analyticsStart && analyticsEnd && analyticsEnd < analyticsStart) return;
+
+                const path = db.collection('artifacts').doc(appId).collection('public').doc('data');
+                let query = path.collection('dailyExpenses');
+
+                if (analyticsStart) query = query.where('date', '>=', analyticsStart);
+                if (analyticsEnd) query = query.where('date', '<', getNextDateString(analyticsEnd));
+
+                setIsAnalyticsLoading(true);
+                const unsubAnalyticsDaily = query.onSnapshot(
+                    snap => {
+                        setAnalyticsDailyExpenses(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+                        setIsAnalyticsLoading(false);
+                    },
+                    err => {
+                        console.error('讀取統計用日常資料失敗:', err);
+                        setAnalyticsDailyExpenses([]);
+                        setIsAnalyticsLoading(false);
+                    }
+                );
+
+                return () => unsubAnalyticsDaily();
+            }, [user, activeTab, analyticsStart, analyticsEnd]);
 
             const showConfirm = (title, message, onConfirm) => setConfirmDialog({ isOpen: true, title, message, onConfirm });
             const showInput = (title, defaultValue, placeholder, onConfirm) => setInputDialog({ isOpen: true, title, value: defaultValue, placeholder, onConfirm });
@@ -382,8 +625,12 @@
                         date: dailyDate, amount: parseFloat(dailyAmount), item: dailyItem, desc: dailyDesc, owner: dailyOwner, updatedAt: new Date().toISOString(), createdAt: new Date().toISOString()
                     };
                     await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('dailyExpenses').add(data);
+                    const entryMonth = (dailyDate || '').substring(0, 7);
+                    if (entryMonth && dailyMonthFilter !== 'all' && dailyMonthFilter !== entryMonth) setDailyMonthFilter(entryMonth);
+                    saveDailyOwner(dailyOwner);
+                    setDailyDate(getLocalDateString());
                     setDailyAmount(''); setDailyDesc('');
-                } catch (err) {}
+                } catch (err) { console.error('新增日常記帳失敗:', err); }
                 setIsProcessing(false);
             };
 
@@ -395,6 +642,8 @@
                     await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('dailyExpenses').doc(dailyEditData.id).update({
                         date: dailyEditData.date, amount: parseFloat(dailyEditData.amount), item: dailyEditData.item, desc: dailyEditData.desc, owner: dailyEditData.owner, updatedAt: new Date().toISOString()
                     });
+                    const editedMonth = (dailyEditData.date || '').substring(0, 7);
+                    if (editedMonth && dailyMonthFilter !== 'all' && dailyMonthFilter !== editedMonth) setDailyMonthFilter(editedMonth);
                     setDailyEditData(null);
                 } catch (err) {}
                 setIsProcessing(false);
@@ -503,7 +752,7 @@
                     setProjExpDesc(exp.desc || '');
                     setProjExpEditingIdx(idx);
                 } else {
-                    setProjExpDate(new Date().toISOString().split('T')[0]);
+                    setProjExpDate(getLocalDateString());
                     setProjExpAmount(''); 
                     setProjExpItem(''); 
                     setProjExpDesc('');
@@ -604,7 +853,7 @@
 
             const handleExportDailyCSV = () => {
                 const rows = dailyExpenses.map(d => [d.date || '', d.amount || 0, d.item || '', d.desc || '', d.owner || '']);
-                downloadCSV("ET_Workspace_Daily_Expenses.csv", ["日期", "金額", "費用分類", "備註", "成員"], rows);
+                downloadCSV(`TE_LifeLog_Daily_Expenses_${dailyMonthFilter === 'all' ? 'All' : dailyMonthFilter}.csv`, ["日期", "金額", "費用分類", "備註", "成員"], rows);
             };
 
             const handleExportProjectCSV = () => {
@@ -627,7 +876,7 @@
                         rows.push([...base, '', '', '', '']);
                     }
                 });
-                downloadCSV("ET_Workspace_Projects.csv", ["專案名稱", "專案類別", "參與成員", "起始日期", "結束日期", "專案備註", "專案費用日期", "專案費用金額", "專案費用分類", "專案費用備註"], rows);
+                downloadCSV("TE_LifeLog_Projects.csv", ["專案名稱", "專案類別", "參與成員", "起始日期", "結束日期", "專案備註", "專案費用日期", "專案費用金額", "專案費用分類", "專案費用備註"], rows);
             };
 
             const handleImportDailyCSV = (e) => {
@@ -726,11 +975,7 @@
             };
 
             // --- 計算與顯示處理 ---
-            const availableDailyMonths = useMemo(() => {
-                const months = new Set();
-                dailyExpenses.forEach(d => { if(d.date) months.add(d.date.substring(0, 7)); });
-                return Array.from(months).sort().reverse(); 
-            }, [dailyExpenses]);
+            const availableDailyMonths = useMemo(() => generateRecentMonths(36), []);
 
             const displayDaily = useMemo(() => {
                 let filtered = [...dailyExpenses];
@@ -788,7 +1033,7 @@
             const analyticsData = useMemo(() => {
                 const ownerMap = {}; let totalExpense = 0; const trendMap = {}; const catMap = {};
                 
-                dailyExpenses.forEach(d => {
+                analyticsDailyExpenses.forEach(d => {
                     if (analyticsStart && d.date < analyticsStart) return;
                     if (analyticsEnd && d.date > analyticsEnd) return;
                     if (analyticsCatFilter !== 'all' && d.item !== analyticsCatFilter) return;
@@ -830,7 +1075,7 @@
                 });
                 
                 return { sortedOwners: Object.entries(ownerMap).sort((a,b)=>b[1]-a[1]), totalExpense, trendKeys: Object.keys(trendMap).sort(), trendMap, catMap };
-            }, [dailyExpenses, tasks, analyticsStart, analyticsEnd, analyticsCatFilter, analyticsOwnerFilter]);
+            }, [analyticsDailyExpenses, tasks, analyticsStart, analyticsEnd, analyticsCatFilter, analyticsOwnerFilter]);
 
             useEffect(() => {
                 if (activeTab !== 'analytics') return;
@@ -885,7 +1130,7 @@
                                 <option value="">選擇分類...</option>
                                 {expenseItems.map(i => <option key={i.id} value={i.name}>{i.name}</option>)}
                             </select>
-                            <select value={dailyOwner} onChange={e=>setDailyOwner(e.target.value)} required className="w-full min-w-0 !max-w-full">
+                            <select value={dailyOwner} onChange={handleDailyOwnerChange} required className="w-full min-w-0 !max-w-full">
                                 {members.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}
                             </select>
                         </div>
@@ -907,7 +1152,7 @@
                             <div className="flex flex-col items-end gap-2">
                                 <div className="flex gap-2">
                                     <select value={dailyMonthFilter} onChange={e=>setDailyMonthFilter(e.target.value)} className="!py-1.5 !px-3 !text-sm !rounded-xl !bg-white shadow-sm border-none font-bold">
-                                        <option value="all">所有月份</option>
+                                        <option value="all">所有月份（讀全部）</option>
                                         {availableDailyMonths.map(m => <option key={m} value={m}>{m}</option>)}
                                     </select>
                                     <button onClick={()=>setDailySort(prev => prev === 'desc' ? 'asc' : 'desc')} className="bubble-btn btn-outline !p-1.5 !rounded-xl !border-none shadow-sm bg-white" title={dailySort === 'desc' ? '改為舊到新' : '改為新到舊'}>
@@ -921,8 +1166,9 @@
                         </div>
 
                         <div className="space-y-3">
-                            {displayDaily.length === 0 && <p className="font-bold text-[var(--bubble-text)]/40 p-5 text-center">這個月還沒有花費喔！</p>}
-                            {displayDaily.map(d => (
+                            {isDailyLoading && <p className="font-bold text-[var(--bubble-text)]/40 p-5 text-center flex items-center justify-center gap-2"><Icon name="loader" size={16} className="animate-spin" /> 讀取中...</p>}
+                            {!isDailyLoading && displayDaily.length === 0 && <p className="font-bold text-[var(--bubble-text)]/40 p-5 text-center">這個月份還沒有花費喔！</p>}
+                            {!isDailyLoading && displayDaily.map(d => (
                                 <div key={d.id} className="p-4 flex justify-between items-center bg-white rounded-[20px] shadow-sm hover:shadow-md transition-shadow group">
                                     <div className="flex items-center gap-4">
                                         <div className="w-12 h-12 rounded-[16px] bg-slate-100/70 flex items-center justify-center text-slate-500"><Icon name="receipt" size={20} /></div>
@@ -1144,6 +1390,12 @@
                         </div>
                     </div>
 
+                    {isAnalyticsLoading && (
+                        <div className="bubble-card p-4 bg-white text-center font-bold text-[var(--bubble-text)]/50 flex items-center justify-center gap-2">
+                            <Icon name="loader" size={18} className="animate-spin" /> 統計資料讀取中...
+                        </div>
+                    )}
+
                     <div className="bubble-card p-8 text-center bg-white border-2 border-[var(--pastel-yellow)]/40">
                         <p className="font-bold text-[15px] text-[var(--bubble-text)]/60 mb-2">總計花費</p>
                         <p className="text-3xl font-black tracking-tighter text-[var(--text-yellow)] drop-shadow-sm">${analyticsData.totalExpense.toLocaleString()}</p>
@@ -1220,8 +1472,8 @@
             return (
                 <div className="min-h-screen pb-32 pt-8 px-4 sm:px-6">
                     <header className="mb-6 px-2 text-center">
-                        <h1 className="text-3xl font-black tracking-tight text-emerald-950 drop-shadow-sm flex justify-center items-center gap-3">
-                            <Icon name="sparkles" size={28} className="text-amber-500" /> E&T Workspace
+                        <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-emerald-950 drop-shadow-sm flex justify-center items-center gap-3">
+                            <Icon name="sparkles" size={28} className="text-amber-500" /> T&E LifeLog
                         </h1>
                     </header>
                     <main>
@@ -1245,7 +1497,7 @@
                                         <div className="bg-[var(--bubble-bg)]/70 rounded-[20px] p-4 space-y-3">
                                             <div className="font-black text-sm text-[var(--text-blue)] flex items-center gap-2"><Icon name="wallet" size={16}/> 日常記帳 CSV</div>
                                             <div className="grid grid-cols-2 gap-3">
-                                                <button onClick={handleExportDailyCSV} className="bubble-btn btn-outline !text-sm"><Icon name="download" size={16}/> 匯出日常</button>
+                                                <button onClick={handleExportDailyCSV} className="bubble-btn btn-outline !text-sm"><Icon name="download" size={16}/> 匯出目前日常</button>
                                                 <button onClick={() => document.getElementById('daily-csv-upload').click()} className="bubble-btn btn-outline !text-sm"><Icon name="upload" size={16}/> 匯入日常</button>
                                                 <input id="daily-csv-upload" type="file" accept=".csv" onChange={handleImportDailyCSV} className="hidden" />
                                             </div>
@@ -1264,10 +1516,22 @@
                         )}
                     </main>
 
+                    {isInitialLoading && (
+                        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-[var(--bubble-bg)]/85 backdrop-blur-sm px-6">
+                            <div className="bubble-card bg-white p-6 modal-panel text-center shadow-2xl">
+                                <div className="w-14 h-14 mx-auto mb-4 rounded-full bg-[var(--pastel-blue)]/40 flex items-center justify-center">
+                                    <Icon name="loader" size={28} className="animate-spin text-[var(--text-blue)]" />
+                                </div>
+                                <div className="font-black text-lg text-[var(--bubble-text)]">資料載入中</div>
+                                <div className="font-bold text-sm text-[var(--bubble-text)]/50 mt-1">正在同步本月記帳與專案資料...</div>
+                            </div>
+                        </div>
+                    )}
+
                     {/* 客製化 Confirm Dialog */}
                     {confirmDialog.isOpen && (
                         <div className="modal-overlay">
-                            <div className="bubble-card bg-white p-6 w-full max-w-sm animate-in zoom-in-95 duration-200 shadow-2xl mx-4">
+                            <div className="bubble-card bg-white p-6 w-full max-w-sm modal-panel animate-in zoom-in-95 duration-200 shadow-2xl mx-4">
                                 <h3 className="font-black text-2xl mb-2 text-[var(--text-orange)]">{confirmDialog.title}</h3>
                                 <p className="font-bold text-[var(--bubble-text)]/70 mb-6">{confirmDialog.message}</p>
                                 <div className="flex gap-3">
@@ -1281,7 +1545,7 @@
                     {/* 客製化 Input Dialog */}
                     {inputDialog.isOpen && (
                         <div className="modal-overlay">
-                            <div className="bubble-card bg-[var(--pastel-blue)] p-6 w-full max-w-sm animate-in zoom-in-95 duration-200 shadow-2xl border-none mx-4">
+                            <div className="bubble-card bg-[var(--pastel-blue)] p-6 w-full max-w-sm modal-panel animate-in zoom-in-95 duration-200 shadow-2xl border-none mx-4">
                                 <h3 className="font-black text-2xl mb-4 text-[var(--text-blue)] drop-shadow-sm">{inputDialog.title}</h3>
                                 <input className="w-full min-w-0 !max-w-full mb-6 !border-none !bg-white" value={inputDialog.value} onChange={e=>setInputDialog({...inputDialog, value: e.target.value})} placeholder={inputDialog.placeholder} autoFocus />
                                 <div className="flex gap-3">
@@ -1295,17 +1559,17 @@
                     {/* 日常修改 Modal (新加入，讓使用者編輯時不會失去原有位置) */}
                     {dailyEditData && (
                         <div className="modal-overlay" onClick={() => setDailyEditData(null)}>
-                            <div className="bubble-card bg-white w-full max-w-sm overflow-hidden animate-in zoom-in-95 duration-200 mx-4" onClick={e=>e.stopPropagation()}>
+                            <div className="bubble-card bg-white w-full max-w-sm modal-panel overflow-hidden animate-in zoom-in-95 duration-200 mx-4" onClick={e=>e.stopPropagation()}>
                                 <div className="p-4 border-b-2 border-gray-50 flex justify-between items-center bg-[var(--pastel-blue)]/30">
                                     <h3 className="font-black text-lg text-[var(--text-blue)]">編輯日常流水帳</h3>
                                     <button onClick={() => setDailyEditData(null)} className="p-1.5 bg-white rounded-full text-gray-500 hover:bg-gray-100"><Icon name="x" size={18}/></button>
                                 </div>
                                 <form onSubmit={submitDailyEdit} className="p-5 sm:p-6 space-y-4">
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mobile-stack">
                                         <input type="date" value={dailyEditData.date} onChange={e=>setDailyEditData({...dailyEditData, date: e.target.value})} required className="w-full min-w-0 !max-w-full" />
                                         <input type="number" placeholder="金額 $" value={dailyEditData.amount} onChange={e=>setDailyEditData({...dailyEditData, amount: e.target.value})} required className="w-full min-w-0 !max-w-full font-black text-xl text-[var(--text-blue)]" />
                                     </div>
-                                    <div className="grid grid-cols-2 gap-3">
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mobile-stack">
                                         <select value={dailyEditData.item} onChange={e=>setDailyEditData({...dailyEditData, item: e.target.value})} required className="w-full min-w-0 !max-w-full">
                                             <option value="">選擇分類...</option>
                                             {expenseItems.map(i => <option key={i.id} value={i.name}>{i.name}</option>)}
@@ -1324,7 +1588,7 @@
                     {/* 專案新增/編輯 Modal */}
                     {isProjectFormOpen && (
                         <div className="modal-overlay" onClick={() => setIsProjectFormOpen(false)}>
-                            <div className="bubble-card bg-white w-full max-w-lg flex flex-col h-[85vh] animate-in zoom-in-95 duration-200 overflow-hidden mx-4" onClick={e=>e.stopPropagation()}>
+                            <div className="bubble-card bg-white w-full max-w-lg modal-panel-wide flex flex-col h-[85vh] animate-in zoom-in-95 duration-200 overflow-hidden mx-4" onClick={e=>e.stopPropagation()}>
                                 <div className="p-5 border-b-2 border-gray-50 flex justify-between items-center bg-white z-10">
                                     <h3 className="font-black text-2xl text-[var(--bubble-text)]">{projectEditingId ? "編輯專案" : "建立新專案"}</h3>
                                     <button onClick={() => setIsProjectFormOpen(false)} className="p-2 bg-gray-50 rounded-full text-gray-500 hover:bg-gray-100"><Icon name="x" size={20}/></button>
@@ -1427,13 +1691,13 @@
                     {/* 專案記單筆花費 Modal (降一列垂直排列解決手機板破圖) */}
                     {expenseModalTask && (
                         <div className="modal-overlay" onClick={() => setExpenseModalTask(null)}>
-                            <div className="bubble-card bg-white w-full max-w-sm overflow-hidden animate-in zoom-in-95 duration-200 mx-4" onClick={e=>e.stopPropagation()}>
+                            <div className="bubble-card bg-white w-full max-w-sm modal-panel overflow-hidden animate-in zoom-in-95 duration-200 mx-4" onClick={e=>e.stopPropagation()}>
                                 <div className="p-4 border-b-2 border-gray-50 flex justify-between items-center bg-[var(--pastel-mint)]/30">
                                     <h3 className="font-black text-lg text-[var(--text-mint)]">{projExpEditingIdx !== null ? '編輯專案費用' : '記一筆專案費用'}</h3>
                                     <button onClick={() => setExpenseModalTask(null)} className="p-1.5 bg-white rounded-full text-gray-500 hover:bg-gray-100"><Icon name="x" size={18}/></button>
                                 </div>
                                 <form onSubmit={submitProjectExpense} className="p-5 sm:p-6 space-y-4">
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mobile-stack">
                                         <input type="date" value={projExpDate} onChange={e=>setProjExpDate(e.target.value)} required className="w-full min-w-0 !max-w-full" />
                                         <input type="number" placeholder="金額 $" value={projExpAmount} onChange={e=>setProjExpAmount(e.target.value)} required className="w-full min-w-0 !max-w-full font-black text-xl text-[var(--text-mint)]" />
                                     </div>
