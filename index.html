@@ -515,6 +515,10 @@
             
             // Project Checklist State 
             const [newChecklistText, setNewChecklistText] = useState({});
+            const [checklistAttachmentModal, setChecklistAttachmentModal] = useState(null);
+            const [checklistAttachmentLinks, setChecklistAttachmentLinks] = useState([]);
+            const [checklistAttachmentImages, setChecklistAttachmentImages] = useState([]);
+            const [isUploadingChecklistImage, setIsUploadingChecklistImage] = useState(false);
 
             // 日常記帳成員選項：保留原本單一成員，同時提供 Terry;Eric 共同記帳選項
             const dailyOwnerOptions = useMemo(() => {
@@ -854,7 +858,7 @@
                 const task = tasks.find(t => t.id === taskId);
                 const list = task.checklist || [];
                 await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('tasks').doc(taskId).update({
-                    checklist: [...list, { id: Date.now().toString(), text, completed: false }]
+                    checklist: [...list, { id: Date.now().toString(), text, completed: false, links: [], images: [] }]
                 });
                 setNewChecklistText({...newChecklistText, [taskId]: ''});
             };
@@ -877,6 +881,102 @@
                     const list = (task.checklist || []).map(item => item.id === itemId ? {...item, text: newText} : item);
                     await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('tasks').doc(taskId).update({ checklist: list });
                 });
+            };
+
+            const updateChecklistItemData = async (taskId, itemId, updater) => {
+                const task = tasks.find(t => t.id === taskId);
+                if (!task) return;
+                const list = (task.checklist || []).map(item => item.id === itemId ? updater(item) : item);
+                await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('tasks').doc(taskId).update({ checklist: list });
+            };
+
+            const openChecklistAttachmentModal = (taskId, itemId) => {
+                const task = tasks.find(t => t.id === taskId);
+                const item = (task?.checklist || []).find(i => i.id === itemId);
+                if (!task || !item) return;
+                setChecklistAttachmentModal({ taskId, itemId, taskText: task.text || '', itemText: item.text || '' });
+                setChecklistAttachmentLinks((item.links || []).map(l => ({ label: l.label || '', url: l.url || '' })));
+                setChecklistAttachmentImages([...(item.images || [])]);
+            };
+
+            const closeChecklistAttachmentModal = () => {
+                setChecklistAttachmentModal(null);
+                setChecklistAttachmentLinks([]);
+                setChecklistAttachmentImages([]);
+                setIsUploadingChecklistImage(false);
+            };
+
+            const saveChecklistAttachments = async () => {
+                if (!checklistAttachmentModal || isProcessing || isUploadingChecklistImage) return;
+                setIsProcessing(true);
+                try {
+                    const cleanLinks = checklistAttachmentLinks
+                        .map(l => ({ label: (l.label || '').trim(), url: (l.url || '').trim() }))
+                        .filter(l => l.url);
+                    const cleanImages = checklistAttachmentImages.filter(Boolean);
+                    await updateChecklistItemData(checklistAttachmentModal.taskId, checklistAttachmentModal.itemId, item => ({
+                        ...item,
+                        links: cleanLinks,
+                        images: cleanImages
+                    }));
+                    closeChecklistAttachmentModal();
+                } catch (error) {
+                    console.error('儲存任務附件失敗:', error);
+                    alert('任務附件儲存失敗，請稍後再試');
+                } finally {
+                    setIsProcessing(false);
+                }
+            };
+
+            const addChecklistAttachmentLink = () => {
+                setChecklistAttachmentLinks(prev => [...prev, { label: '', url: '' }]);
+            };
+
+            const updateChecklistAttachmentLink = (idx, field, value) => {
+                setChecklistAttachmentLinks(prev => prev.map((link, i) => i === idx ? { ...link, [field]: value } : link));
+            };
+
+            const deleteChecklistAttachmentLink = (idx) => {
+                setChecklistAttachmentLinks(prev => prev.filter((_, i) => i !== idx));
+            };
+
+            const handleChecklistImageUpload = async (e) => {
+                const files = Array.from(e.target.files || []);
+                if (files.length === 0) return;
+                setIsUploadingChecklistImage(true);
+                try {
+                    const urls = await Promise.all(files.map(processAndUploadFile));
+                    setChecklistAttachmentImages(prev => [...prev, ...urls]);
+                } catch (error) {
+                    console.error('任務圖片上傳失敗:', error);
+                    alert('任務圖片上傳失敗，請檢查權限或網路連線');
+                } finally {
+                    setIsUploadingChecklistImage(false);
+                    e.target.value = '';
+                }
+            };
+
+            const handleChecklistImagePaste = async (e) => {
+                const items = e.clipboardData?.items || [];
+                const files = [];
+                for (let i = 0; i < items.length; i++) {
+                    if (items[i].type.indexOf('image') !== -1) files.push(items[i].getAsFile());
+                }
+                if (files.length === 0) return;
+                setIsUploadingChecklistImage(true);
+                try {
+                    const urls = await Promise.all(files.map(processAndUploadFile));
+                    setChecklistAttachmentImages(prev => [...prev, ...urls]);
+                } catch (error) {
+                    console.error('任務圖片貼上失敗:', error);
+                    alert('任務圖片上傳失敗');
+                } finally {
+                    setIsUploadingChecklistImage(false);
+                }
+            };
+
+            const deleteChecklistAttachmentImage = (idx) => {
+                setChecklistAttachmentImages(prev => prev.filter((_, i) => i !== idx));
             };
 
             const calculateTaskTotal = (t) => (t.expenses || []).reduce((s, i) => s + (parseFloat(i.amount) || 0), 0);
@@ -1384,7 +1484,11 @@
                     filtered = filtered.filter(t => {
                         const ownersText = (t.owners || []).join(' ');
                         const linksText = (t.links || []).map(l => `${l.label || ''} ${l.url || ''}`).join(' ');
-                        const checklistText = (t.checklist || []).map(item => item.text || '').join(' ');
+                        const checklistText = (t.checklist || []).map(item => {
+                            const itemLinksText = (item.links || []).map(l => `${l.label || ''} ${l.url || ''}`).join(' ');
+                            const itemImagesText = (item.images || []).join(' ');
+                            return `${item.text || ''} ${itemLinksText} ${itemImagesText}`;
+                        }).join(' ');
                         const expenseText = (t.expenses || []).map(e => `${e.date || ''} ${e.amount || ''} ${e.item || ''} ${e.desc || ''}`).join(' ');
                         const searchableText = [
                             t.text,
@@ -1727,18 +1831,53 @@
                                             <div className="mb-6 bg-white p-5 rounded-[24px] shadow-sm border border-[var(--pastel-mint)]/40">
                                                 <h4 className="font-black text-[14px] text-[var(--text-mint)] flex items-center gap-2 mb-4"><Icon name="check-circle" size={18}/> 任務清單</h4>
                                                 <div className="space-y-3 mb-4">
-                                                    {checklists.map(item => (
-                                                        <div key={item.id} className={`flex items-start gap-3 group transition-all ${item.completed ? 'opacity-50' : ''}`}>
-                                                            <div onClick={()=>toggleChecklistItem(t.id, item.id)} className={`cute-checkbox flex-shrink-0 mt-0.5 ${item.completed ? 'checked' : ''}`}>
-                                                                {item.completed && <Icon name="check" size={16} className="text-[var(--text-mint)]" />}
+                                                    {checklists.map(item => {
+                                                        const itemLinks = item.links || [];
+                                                        const itemImages = item.images || [];
+                                                        const attachmentCount = itemLinks.length + itemImages.length;
+                                                        return (
+                                                            <div key={item.id} className={`p-3 rounded-[18px] bg-gray-50/70 border border-gray-100 transition-all ${item.completed ? 'opacity-60' : ''}`}>
+                                                                <div className="flex items-start gap-3 group">
+                                                                    <div onClick={()=>toggleChecklistItem(t.id, item.id)} className={`cute-checkbox flex-shrink-0 mt-0.5 ${item.completed ? 'checked' : ''}`}>
+                                                                        {item.completed && <Icon name="check" size={16} className="text-[var(--text-mint)]" />}
+                                                                    </div>
+                                                                    <div className="flex-grow min-w-0">
+                                                                        <div className="cursor-pointer pt-0.5" onClick={()=>toggleChecklistItem(t.id, item.id)}>
+                                                                            <span className={`font-bold text-[15px] break-words ${item.completed ? 'line-through' : ''}`}>{item.text}</span>
+                                                                        </div>
+                                                                        {(itemLinks.length > 0 || itemImages.length > 0) && (
+                                                                            <div className="mt-3 space-y-2">
+                                                                                {itemLinks.length > 0 && (
+                                                                                    <div className="flex flex-wrap gap-2">
+                                                                                        {itemLinks.map((l, idx) => (
+                                                                                            <a key={idx} href={l.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white text-[var(--text-blue)] text-[12px] font-black border border-[var(--pastel-blue)]/40 shadow-sm">
+                                                                                                <Icon name="link" size={13}/> {l.label || '連結'}
+                                                                                            </a>
+                                                                                        ))}
+                                                                                    </div>
+                                                                                )}
+                                                                                {itemImages.length > 0 && (
+                                                                                    <div className="flex flex-wrap gap-2">
+                                                                                        {itemImages.map((img, idx) => (
+                                                                                            <a key={idx} href={img} target="_blank" rel="noreferrer">
+                                                                                                <img src={img} className="w-16 h-16 object-cover rounded-[14px] shadow-sm border border-gray-200 bg-white" alt="任務附件" />
+                                                                                            </a>
+                                                                                        ))}
+                                                                                    </div>
+                                                                                )}
+                                                                            </div>
+                                                                        )}
+                                                                    </div>
+                                                                    <button onClick={()=>openChecklistAttachmentModal(t.id, item.id)} className="relative text-[var(--text-mint)] bg-white hover:bg-[var(--pastel-mint)]/30 p-1.5 rounded-lg transition-all shadow-sm border border-gray-100" title="管理連結與圖片">
+                                                                        <Icon name="paperclip" size={16}/>
+                                                                        {attachmentCount > 0 && <span className="absolute -top-2 -right-2 min-w-[18px] h-[18px] px-1 rounded-full bg-[var(--pastel-yellow)] text-[var(--text-yellow)] text-[10px] font-black flex items-center justify-center shadow-sm">{attachmentCount}</span>}
+                                                                    </button>
+                                                                    <button onClick={()=>editChecklistItem(t.id, item.id, item.text)} className="text-[var(--text-blue)] bg-white hover:bg-[var(--pastel-blue)]/20 p-1.5 rounded-lg transition-all shadow-sm border border-gray-100" title="修改項目"><Icon name="edit-2" size={16}/></button>
+                                                                    <button onClick={()=>deleteChecklistItem(t.id, item.id)} className="text-[var(--pastel-orange)] bg-white hover:bg-[var(--pastel-orange)]/10 p-1.5 rounded-lg transition-all shadow-sm border border-gray-100" title="刪除項目"><Icon name="trash-2" size={16}/></button>
+                                                                </div>
                                                             </div>
-                                                            <div className="flex-grow pt-0.5 cursor-pointer" onClick={()=>toggleChecklistItem(t.id, item.id)}>
-                                                                <span className={`font-bold text-[15px] ${item.completed ? 'line-through' : ''}`}>{item.text}</span>
-                                                            </div>
-                                                            <button onClick={()=>editChecklistItem(t.id, item.id, item.text)} className="opacity-0 group-hover:opacity-100 text-[var(--text-blue)] hover:bg-[var(--pastel-blue)]/20 p-1.5 rounded-lg transition-all" title="修改項目"><Icon name="edit-2" size={16}/></button>
-                                                            <button onClick={()=>deleteChecklistItem(t.id, item.id)} className="opacity-0 group-hover:opacity-100 text-[var(--pastel-orange)] hover:bg-[var(--pastel-orange)]/10 p-1.5 rounded-lg transition-all" title="刪除項目"><Icon name="trash-2" size={16}/></button>
-                                                        </div>
-                                                    ))}
+                                                        );
+                                                    })}
                                                     {checklists.length === 0 && <div className="text-sm font-bold text-gray-400">目前沒有清單項目，在下方新增吧！</div>}
                                                 </div>
                                                 <div className="flex gap-2">
@@ -2149,6 +2288,72 @@
                                     <input placeholder="備註 (選填)..." value={projExpDesc} onChange={e=>setProjExpDesc(e.target.value)} className="w-full min-w-0 !max-w-full" />
                                     <button type="submit" disabled={isProcessing} className="bubble-btn btn-mint w-full py-3 mt-4">{projExpEditingIdx !== null ? '儲存修改' : '加入明細'}</button>
                                 </form>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 任務清單附件管理 Modal */}
+                    {checklistAttachmentModal && (
+                        <div className="modal-overlay" onClick={closeChecklistAttachmentModal}>
+                            <div className="bubble-card bg-white w-full max-w-lg modal-panel-wide flex flex-col h-[82vh] animate-in zoom-in-95 duration-200 overflow-hidden mx-4" onClick={e=>e.stopPropagation()}>
+                                <div className="p-4 border-b-2 border-gray-50 flex justify-between items-start gap-3 bg-[var(--pastel-mint)]/30">
+                                    <div className="min-w-0">
+                                        <h3 className="font-black text-lg text-[var(--text-mint)] flex items-center gap-2"><Icon name="paperclip" size={18}/> 任務附件</h3>
+                                        <div className="font-bold text-[12px] text-[var(--bubble-text)]/50 mt-1 truncate">{checklistAttachmentModal.taskText}</div>
+                                        <div className="font-black text-sm text-[var(--bubble-text)] mt-1 break-words">{checklistAttachmentModal.itemText}</div>
+                                    </div>
+                                    <button onClick={closeChecklistAttachmentModal} className="p-1.5 bg-white rounded-full text-gray-500 hover:bg-gray-100 flex-shrink-0"><Icon name="x" size={18}/></button>
+                                </div>
+                                <div className="flex-grow overflow-y-auto no-scrollbar p-5 space-y-5 bg-[var(--bubble-bg)]/35">
+                                    <div className="bg-white p-5 rounded-[24px] shadow-sm border border-gray-100">
+                                        <div className="flex justify-between items-center mb-3">
+                                            <label className="font-black text-sm text-[var(--bubble-text)]/60 flex items-center gap-2"><Icon name="link" size={16}/> 連結</label>
+                                            <button type="button" onClick={addChecklistAttachmentLink} className="bubble-btn bg-gray-50 text-gray-600 !py-1 !px-3 !text-xs shadow-none"><Icon name="plus" size={14}/> 新增連結</button>
+                                        </div>
+                                        <div className="space-y-3">
+                                            {checklistAttachmentLinks.length === 0 && <div className="text-sm font-bold text-gray-400 p-4 text-center border-2 border-dashed border-gray-200 rounded-[14px]">尚未新增連結</div>}
+                                            {checklistAttachmentLinks.map((li, i) => (
+                                                <div key={i} className="flex flex-col sm:flex-row gap-2 bg-gray-50 p-3 rounded-[16px]">
+                                                    <input className="w-full sm:w-1/3 min-w-0 !max-w-full text-sm !bg-white" placeholder="標籤，例如：訂房、地圖" value={li.label} onChange={e => updateChecklistAttachmentLink(i, 'label', e.target.value)} />
+                                                    <input className="flex-grow min-w-0 !max-w-full text-sm w-full !bg-white" placeholder="網址 (https://...)" value={li.url} onChange={e => updateChecklistAttachmentLink(i, 'url', e.target.value)} />
+                                                    <button type="button" onClick={() => deleteChecklistAttachmentLink(i)} className="p-2 text-[var(--pastel-orange)] bg-white rounded-xl shadow-sm self-end sm:self-auto"><Icon name="trash-2" size={18}/></button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    <div className="bg-white p-5 rounded-[24px] shadow-sm border border-gray-100">
+                                        <div className="flex justify-between items-center mb-3">
+                                            <label className="font-black text-sm text-[var(--bubble-text)]/60 flex items-center gap-2"><Icon name="image" size={16}/> 圖片</label>
+                                            <button type="button" disabled={isUploadingChecklistImage} onClick={() => document.getElementById('checklist-image-upload').click()} className="bubble-btn btn-outline !py-1 !px-3 !text-xs shadow-none"><Icon name="upload" size={14}/> {isUploadingChecklistImage ? '上傳中...' : '上傳圖片'}</button>
+                                            <input id="checklist-image-upload" type="file" accept="image/*" multiple onChange={handleChecklistImageUpload} className="hidden" />
+                                        </div>
+                                        <div className="space-y-3" onPaste={handleChecklistImagePaste}>
+                                            {checklistAttachmentImages.length === 0 && !isUploadingChecklistImage && <div className="text-sm font-bold text-gray-400 p-4 text-center border-2 border-dashed border-gray-200 rounded-[14px]">可一次選多張圖片，或在此 Ctrl+V 貼上截圖</div>}
+                                            {isUploadingChecklistImage && (
+                                                <div className="text-sm font-bold text-[var(--text-blue)] p-4 text-center flex items-center justify-center gap-2">
+                                                    <Icon name="loader" size={18} className="animate-spin" /> 圖片上傳中，請稍候...
+                                                </div>
+                                            )}
+                                            {checklistAttachmentImages.length > 0 && (
+                                                <div className="flex flex-wrap gap-3 p-2 bg-gray-50 rounded-[16px]">
+                                                    {checklistAttachmentImages.map((img, i) => (
+                                                        <div key={i} className="relative group">
+                                                            <a href={img} target="_blank" rel="noreferrer">
+                                                                <img src={img} className="w-20 h-20 object-cover rounded-[12px] shadow-sm border border-gray-200 bg-white" alt="任務附件預覽" />
+                                                            </a>
+                                                            <button type="button" onClick={() => deleteChecklistAttachmentImage(i)} className="absolute -top-2 -right-2 p-1.5 text-white bg-rose-500 rounded-full shadow-md"><Icon name="x" size={12}/></button>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="p-5 border-t-2 border-gray-50 bg-white flex gap-3">
+                                    <button onClick={closeChecklistAttachmentModal} className="bubble-btn btn-outline flex-1 py-3">取消</button>
+                                    <button onClick={saveChecklistAttachments} disabled={isProcessing || isUploadingChecklistImage} className="bubble-btn btn-mint flex-1 py-3">{isProcessing || isUploadingChecklistImage ? '處理中...' : '儲存附件'}</button>
+                                </div>
                             </div>
                         </div>
                     )}
