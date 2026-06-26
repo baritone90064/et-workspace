@@ -819,27 +819,157 @@
                 return `"${text.replace(/"/g, '""')}"`;
             };
 
-            const parseCSVLine = (line) => {
-                const result = [];
+            const parseCSVContent = (content) => {
+                const rows = [];
+                let row = [];
                 let current = '';
                 let inQuotes = false;
-                for (let i = 0; i < line.length; i++) {
-                    const char = line[i];
-                    const next = line[i + 1];
+                const text = String(content || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+                for (let i = 0; i < text.length; i++) {
+                    const char = text[i];
+                    const next = text[i + 1];
+
                     if (char === '"' && inQuotes && next === '"') {
                         current += '"';
                         i++;
                     } else if (char === '"') {
                         inQuotes = !inQuotes;
                     } else if (char === ',' && !inQuotes) {
-                        result.push(current.trim());
+                        row.push(current.trim());
+                        current = '';
+                    } else if (char === '\n' && !inQuotes) {
+                        row.push(current.trim());
+                        if (row.some(cell => cell !== '')) rows.push(row);
+                        row = [];
                         current = '';
                     } else {
                         current += char;
                     }
                 }
-                result.push(current.trim());
-                return result;
+
+                row.push(current.trim());
+                if (row.some(cell => cell !== '')) rows.push(row);
+                return rows;
+            };
+
+            // 保留舊函式名稱，避免其他地方仍有呼叫時中斷
+            const parseCSVLine = (line) => parseCSVContent(line)[0] || [];
+
+            const normalizeHeader = (value) => String(value || '')
+                .replace(/^\uFEFF/, '')
+                .trim()
+                .replace(/\s+/g, '')
+                .toLowerCase();
+
+            const findColumnIndex = (headers, candidates) => {
+                const normalizedHeaders = headers.map(normalizeHeader);
+                for (const candidate of candidates) {
+                    const index = normalizedHeaders.indexOf(normalizeHeader(candidate));
+                    if (index >= 0) return index;
+                }
+                return -1;
+            };
+
+            const getCell = (row, index) => index >= 0 ? String(row[index] || '').trim() : '';
+
+            const looksLikeHeaderRow = (row) => {
+                const headerWords = ['日期', '金額', '費用分類', '專案名稱', '專案費用金額', '參與成員', '備註', '成員'];
+                return row.some(cell => headerWords.includes(normalizeHeader(cell)));
+            };
+
+            const normalizeDateValue = (value) => {
+                let text = String(value || '').trim().replace(/^\uFEFF/, '');
+                if (!text) return '';
+
+                text = text.replace(/[年月.]/g, '/').replace(/日/g, '').split(' ')[0].trim();
+
+                if (/^\d{8}$/.test(text)) {
+                    text = `${text.substring(0, 4)}/${text.substring(4, 6)}/${text.substring(6, 8)}`;
+                }
+
+                const serialText = text.replace(/,/g, '');
+                if (/^\d+(\.\d+)?$/.test(serialText)) {
+                    const serial = Number(serialText);
+                    if (serial > 20000 && serial < 80000) {
+                        const utcValue = Math.round((serial - 25569) * 86400 * 1000);
+                        const date = new Date(utcValue);
+                        if (!Number.isNaN(date.getTime())) return date.toISOString().slice(0, 10);
+                    }
+                }
+
+                const match = text.match(/^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})$/);
+                if (!match) return '';
+
+                const year = Number(match[1]);
+                const month = Number(match[2]);
+                const day = Number(match[3]);
+                const date = new Date(year, month - 1, day);
+
+                if (
+                    date.getFullYear() !== year ||
+                    date.getMonth() !== month - 1 ||
+                    date.getDate() !== day
+                ) return '';
+
+                return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+            };
+
+            const normalizeAmountValue = (value) => {
+                const original = String(value || '').trim();
+                if (!original) return { isValid: false, value: 0 };
+
+                let text = original
+                    .replace(/\s/g, '')
+                    .replace(/,/g, '')
+                    .replace(/，/g, '')
+                    .replace(/NTD/ig, '')
+                    .replace(/TWD/ig, '')
+                    .replace(/NT\$/ig, '')
+                    .replace(/[＄$元]/g, '');
+
+                const negativeMatch = text.match(/^\((.+)\)$/);
+                if (negativeMatch) text = `-${negativeMatch[1]}`;
+
+                const number = Number(text);
+                return { isValid: Number.isFinite(number), value: number };
+            };
+
+            const normalizeOwnerText = (value) => String(value || '')
+                .trim()
+                .replace(/\s*[;；,，、]\s*/g, '； ')
+                .replace(/\s+/g, ' ');
+
+            const splitOwners = (value) => String(value || '')
+                .split(/[;；,，、]/)
+                .map(owner => owner.trim())
+                .filter(Boolean);
+
+            const getDailyImportIndexes = (headers, hasHeader) => {
+                if (!hasHeader) return { date: 0, amount: 1, item: 2, desc: 3, owner: 4 };
+                return {
+                    date: findColumnIndex(headers, ['日期', 'date', '消費日期', '支出日期', '費用日期', '付款日期']),
+                    amount: findColumnIndex(headers, ['金額', 'amount', '費用金額', '支出金額', '消費金額', '付款金額']),
+                    item: findColumnIndex(headers, ['費用分類', '分類', '項目分類', '支出分類', '消費分類', 'item', 'category']),
+                    desc: findColumnIndex(headers, ['備註', '說明', '描述', '內容', 'memo', 'note', 'desc', 'description']),
+                    owner: findColumnIndex(headers, ['成員', 'member', 'owner', '使用者', '付款人', '人員'])
+                };
+            };
+
+            const getProjectImportIndexes = (headers, hasHeader) => {
+                if (!hasHeader) return { text: 0, category: 1, owners: 2, startDate: 3, endDate: 4, note: 5, expDate: 6, expAmount: 7, expItem: 8, expDesc: 9 };
+                return {
+                    text: findColumnIndex(headers, ['專案名稱', '專案', '行程名稱', '活動名稱', '名稱', 'project', 'projectname']),
+                    category: findColumnIndex(headers, ['專案類別', '類別', 'category', 'projectcategory']),
+                    owners: findColumnIndex(headers, ['參與成員', '成員', '負責人', '參與者', 'members', 'owners']),
+                    startDate: findColumnIndex(headers, ['起始日期', '開始日期', '專案起始日期', '行程起始日期', 'startdate']),
+                    endDate: findColumnIndex(headers, ['結束日期', '完成日期', '專案結束日期', '行程結束日期', 'enddate']),
+                    note: findColumnIndex(headers, ['專案備註', '行程備註', 'projectnote', 'projectmemo']),
+                    expDate: findColumnIndex(headers, ['專案費用日期', '費用日期', '支出日期', '消費日期', 'expensedate']),
+                    expAmount: findColumnIndex(headers, ['專案費用金額', '費用金額', '支出金額', '消費金額', '金額', 'amount', 'expenseamount']),
+                    expItem: findColumnIndex(headers, ['專案費用分類', '費用分類', '支出分類', '消費分類', '分類', 'expenseitem', 'expensecategory']),
+                    expDesc: findColumnIndex(headers, ['專案費用備註', '費用備註', '支出備註', '消費備註', '明細備註', 'expensedesc', 'expensenote'])
+                };
             };
 
             const downloadCSV = (filename, header, rows) => {
@@ -886,28 +1016,82 @@
                 const reader = new FileReader();
                 reader.onload = async (ev) => {
                     try {
-                        const lines = ev.target.result.split(/\r?\n/).filter(line => line.trim());
-                        const batch = db.batch();
+                        const rows = parseCSVContent(ev.target.result);
+                        if (rows.length === 0) throw new Error('CSV 沒有資料');
+
+                        const hasHeader = looksLikeHeaderRow(rows[0]);
+                        const headers = hasHeader ? rows[0] : [];
+                        const dataRows = hasHeader ? rows.slice(1) : rows;
+                        const idx = getDailyImportIndexes(headers, hasHeader);
+
+                        if (idx.date < 0 || idx.amount < 0 || idx.item < 0) {
+                            throw new Error('找不到必要欄位：日期、金額、費用分類');
+                        }
+
+                        const refBase = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('dailyExpenses');
+                        const importedMonths = new Set();
+                        const skippedReasons = [];
+                        const now = new Date().toISOString();
+                        let batch = db.batch();
+                        let batchOps = 0;
                         let count = 0;
-                        for (let i = 1; i < lines.length; i++) {
-                            const [date, amount, item, desc, owner] = parseCSVLine(lines[i]);
-                            if (!date || !amount || !item) continue;
-                            const ref = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('dailyExpenses').doc();
+                        let skipped = 0;
+
+                        const commitIfNeeded = async (force = false) => {
+                            if (batchOps === 0) return;
+                            if (force || batchOps >= 450) {
+                                await batch.commit();
+                                batch = db.batch();
+                                batchOps = 0;
+                            }
+                        };
+
+                        for (let i = 0; i < dataRows.length; i++) {
+                            const row = dataRows[i];
+                            const lineNo = hasHeader ? i + 2 : i + 1;
+                            const date = normalizeDateValue(getCell(row, idx.date));
+                            const amountResult = normalizeAmountValue(getCell(row, idx.amount));
+                            const item = getCell(row, idx.item);
+                            const desc = getCell(row, idx.desc);
+                            const owner = normalizeOwnerText(getCell(row, idx.owner));
+
+                            if (!date || !amountResult.isValid || !item) {
+                                skipped++;
+                                if (skippedReasons.length < 5) {
+                                    const reason = !date ? '日期格式錯誤' : (!amountResult.isValid ? '金額不是數字' : '費用分類空白');
+                                    skippedReasons.push(`第 ${lineNo} 列：${reason}`);
+                                }
+                                continue;
+                            }
+
+                            const ref = refBase.doc();
                             batch.set(ref, {
                                 date,
-                                amount: parseFloat(amount) || 0,
+                                amount: amountResult.value,
                                 item,
                                 desc: desc || '',
                                 owner: owner || '',
-                                createdAt: new Date().toISOString(),
-                                updatedAt: new Date().toISOString()
+                                createdAt: now,
+                                updatedAt: now
                             });
+                            batchOps++;
                             count++;
+                            importedMonths.add(date.substring(0, 7));
+                            await commitIfNeeded();
                         }
-                        await batch.commit();
-                        alert(`成功匯入 ${count} 筆日常記帳資料！`);
+
+                        await commitIfNeeded(true);
+
+                        if (count > 0) {
+                            const latestMonth = Array.from(importedMonths).sort().reverse()[0];
+                            if (latestMonth && dailyMonthFilter !== 'all') setDailyMonthFilter(latestMonth);
+                        }
+
+                        const detail = skippedReasons.length ? `\n\n略過原因範例：\n${skippedReasons.join('\n')}` : '';
+                        alert(`日常記帳匯入完成！\n成功：${count} 筆\n略過：${skipped} 筆${detail}`);
                     } catch (error) {
-                        alert("日常記帳匯入失敗，請確認 CSV 欄位為：日期、金額、費用分類、備註、成員");
+                        console.error('日常記帳匯入失敗:', error);
+                        alert(`日常記帳匯入失敗：${error.message || '請確認 CSV 欄位包含日期、金額、費用分類、備註、成員'}`);
                     }
                     setIsProcessing(false);
                     e.target.value = '';
@@ -922,18 +1106,49 @@
                 const reader = new FileReader();
                 reader.onload = async (ev) => {
                     try {
-                        const lines = ev.target.result.split(/\r?\n/).filter(line => line.trim());
-                        const projectMap = new Map();
-                        for (let i = 1; i < lines.length; i++) {
-                            const [text, projectCategory, projectOwners, projectStartDate, projectEndDate, projectNote, expDate, expAmount, expItem, expDesc] = parseCSVLine(lines[i]);
-                            if (!text) continue;
+                        const rows = parseCSVContent(ev.target.result);
+                        if (rows.length === 0) throw new Error('CSV 沒有資料');
 
-                            const key = [text, projectCategory || '', projectOwners || '', projectStartDate || '', projectEndDate || '', projectNote || ''].join('||');
+                        const hasHeader = looksLikeHeaderRow(rows[0]);
+                        const headers = hasHeader ? rows[0] : [];
+                        const dataRows = hasHeader ? rows.slice(1) : rows;
+                        const idx = getProjectImportIndexes(headers, hasHeader);
+
+                        if (idx.text < 0) throw new Error('找不到必要欄位：專案名稱');
+
+                        const projectMap = new Map();
+                        const skippedReasons = [];
+                        const now = new Date().toISOString();
+                        let skippedRows = 0;
+                        let skippedExpenses = 0;
+
+                        for (let i = 0; i < dataRows.length; i++) {
+                            const row = dataRows[i];
+                            const lineNo = hasHeader ? i + 2 : i + 1;
+                            const text = getCell(row, idx.text);
+                            if (!text) {
+                                skippedRows++;
+                                if (skippedReasons.length < 5) skippedReasons.push(`第 ${lineNo} 列：專案名稱空白`);
+                                continue;
+                            }
+
+                            const projectCategory = getCell(row, idx.category);
+                            const projectOwnersRaw = getCell(row, idx.owners);
+                            const startRaw = getCell(row, idx.startDate);
+                            const endRaw = getCell(row, idx.endDate);
+                            const projectStartDate = startRaw ? normalizeDateValue(startRaw) : '';
+                            const projectEndDate = endRaw ? normalizeDateValue(endRaw) : '';
+                            const projectNote = getCell(row, idx.note);
+
+                            if (startRaw && !projectStartDate && skippedReasons.length < 5) skippedReasons.push(`第 ${lineNo} 列：起始日期格式錯誤，已留空`);
+                            if (endRaw && !projectEndDate && skippedReasons.length < 5) skippedReasons.push(`第 ${lineNo} 列：結束日期格式錯誤，已留空`);
+
+                            const key = [text, projectCategory || '', projectOwnersRaw || '', projectStartDate || '', projectEndDate || '', projectNote || ''].join('||');
                             if (!projectMap.has(key)) {
                                 projectMap.set(key, {
                                     text,
                                     category: projectCategory || '',
-                                    owners: projectOwners ? projectOwners.split(';').map(o => o.trim()).filter(Boolean) : [],
+                                    owners: splitOwners(projectOwnersRaw),
                                     startDate: projectStartDate || '',
                                     endDate: projectEndDate || '',
                                     note: projectNote || '',
@@ -942,36 +1157,141 @@
                                     expenses: [],
                                     checklist: [],
                                     completed: false,
-                                    createdAt: new Date().toISOString(),
-                                    updatedAt: new Date().toISOString()
+                                    createdAt: now,
+                                    updatedAt: now
                                 });
                             }
 
-                            if (expDate || expAmount || expItem || expDesc) {
+                            const expDateRaw = getCell(row, idx.expDate);
+                            const expAmountRaw = getCell(row, idx.expAmount);
+                            const expItem = getCell(row, idx.expItem);
+                            const expDesc = getCell(row, idx.expDesc);
+                            const hasExpenseData = expDateRaw || expAmountRaw || expItem || expDesc;
+
+                            if (hasExpenseData) {
+                                const expDate = expDateRaw ? normalizeDateValue(expDateRaw) : '';
+                                const amountResult = normalizeAmountValue(expAmountRaw);
+
+                                if ((expDateRaw && !expDate) || (expAmountRaw && !amountResult.isValid)) {
+                                    skippedExpenses++;
+                                    if (skippedReasons.length < 5) {
+                                        const reason = expDateRaw && !expDate ? '專案費用日期格式錯誤' : '專案費用金額不是數字';
+                                        skippedReasons.push(`第 ${lineNo} 列：${reason}`);
+                                    }
+                                    continue;
+                                }
+
                                 projectMap.get(key).expenses.push({
                                     date: expDate || '',
-                                    amount: parseFloat(expAmount) || 0,
+                                    amount: amountResult.isValid ? amountResult.value : 0,
                                     item: expItem || '',
                                     desc: expDesc || ''
                                 });
                             }
                         }
 
-                        const batch = db.batch();
+                        const projects = Array.from(projectMap.values());
+                        if (projects.length === 0) throw new Error('沒有可匯入的專案資料');
+
                         const refBase = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('tasks');
-                        projectMap.forEach(project => {
+                        let batch = db.batch();
+                        let batchOps = 0;
+                        for (const project of projects) {
                             const ref = refBase.doc();
                             batch.set(ref, project);
-                        });
-                        await batch.commit();
-                        alert(`成功匯入 ${projectMap.size} 個專案資料！`);
+                            batchOps++;
+                            if (batchOps >= 450) {
+                                await batch.commit();
+                                batch = db.batch();
+                                batchOps = 0;
+                            }
+                        }
+                        if (batchOps > 0) await batch.commit();
+
+                        const detail = skippedReasons.length ? `\n\n略過/修正原因範例：\n${skippedReasons.join('\n')}` : '';
+                        alert(`專案匯入完成！\n成功：${projects.length} 個專案\n略過列數：${skippedRows} 列\n略過費用：${skippedExpenses} 筆${detail}`);
                     } catch (error) {
-                        alert("專案匯入失敗，請確認 CSV 欄位為：專案名稱、專案類別、參與成員、起始日期、結束日期、專案備註、專案費用日期、專案費用金額、專案費用分類、專案費用備註");
+                        console.error('專案匯入失敗:', error);
+                        alert(`專案匯入失敗：${error.message || '請確認 CSV 欄位包含專案名稱與相關欄位'}`);
                     }
                     setIsProcessing(false);
                     e.target.value = '';
                 };
                 reader.readAsText(file);
+            };
+
+
+            const isSuspectBadDailyImport = (d) => {
+                const dateText = String(d.date || '').trim();
+                const amountNumber = Number(d.amount);
+                const descAmount = normalizeAmountValue(d.desc);
+                const itemText = String(d.item || '').trim();
+
+                const hasSlashDate = dateText.includes('/');
+                const amountIsZero = Number.isFinite(amountNumber) && amountNumber === 0;
+                const descLooksLikeAmount = descAmount.isValid;
+                const itemExists = itemText.length > 0;
+
+                // 主要用來抓到舊版錯位匯入：日期仍是 2026/6/23、金額被餐費等文字轉成 0、真正金額跑到備註欄。
+                return hasSlashDate && amountIsZero && descLooksLikeAmount && itemExists;
+            };
+
+            const handleCleanBadDailyImport = async () => {
+                if (isProcessing) return;
+                setIsProcessing(true);
+                try {
+                    const refBase = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('dailyExpenses');
+                    const snap = await refBase.get();
+                    const suspects = snap.docs
+                        .map(doc => ({ id: doc.id, ...doc.data() }))
+                        .filter(isSuspectBadDailyImport);
+
+                    if (suspects.length === 0) {
+                        alert('沒有找到疑似錯誤匯入的日常資料。');
+                        setIsProcessing(false);
+                        return;
+                    }
+
+                    const examples = suspects.slice(0, 5).map((d, idx) => {
+                        return `${idx + 1}. ${d.date || ''}｜分類:${d.item || ''}｜備註:${d.desc || ''}｜成員:${d.owner || ''}`;
+                    }).join('\n');
+
+                    showConfirm(
+                        '清除錯誤匯入資料',
+                        `找到 ${suspects.length} 筆疑似錯誤匯入的日常資料。\n\n判斷條件：日期含「/」、金額為 0、備註看起來是數字。\n\n前 5 筆範例：\n${examples}\n\n確定要刪除這些資料嗎？`,
+                        async () => {
+                            setIsProcessing(true);
+                            try {
+                                let batch = db.batch();
+                                let batchOps = 0;
+                                let deleted = 0;
+
+                                for (const d of suspects) {
+                                    batch.delete(refBase.doc(d.id));
+                                    batchOps++;
+                                    deleted++;
+
+                                    if (batchOps >= 450) {
+                                        await batch.commit();
+                                        batch = db.batch();
+                                        batchOps = 0;
+                                    }
+                                }
+                                if (batchOps > 0) await batch.commit();
+
+                                alert(`已刪除 ${deleted} 筆疑似錯誤匯入的日常資料。`);
+                            } catch (err) {
+                                console.error('清除錯誤匯入資料失敗:', err);
+                                alert(`清除失敗：${err.message || '請稍後再試'}`);
+                            }
+                            setIsProcessing(false);
+                        }
+                    );
+                } catch (err) {
+                    console.error('檢查錯誤匯入資料失敗:', err);
+                    alert(`檢查失敗：${err.message || '請稍後再試'}`);
+                }
+                setIsProcessing(false);
             };
 
             // --- 計算與顯示處理 ---
@@ -1509,6 +1829,13 @@
                                                 <button onClick={() => document.getElementById('project-csv-upload').click()} className="bubble-btn btn-outline !text-sm"><Icon name="upload" size={16}/> 匯入專案</button>
                                                 <input id="project-csv-upload" type="file" accept=".csv" onChange={handleImportProjectCSV} className="hidden" />
                                             </div>
+                                        </div>
+                                        <div className="bg-[var(--pastel-orange)]/20 rounded-[20px] p-4 space-y-3 border border-[var(--pastel-orange)]/40">
+                                            <div className="font-black text-sm text-[var(--text-orange)] flex items-center gap-2"><Icon name="alert-triangle" size={16}/> 一次性清理工具</div>
+                                            <p className="text-xs font-bold text-[var(--text-orange)]/80 leading-relaxed">用來清除舊版 CSV 欄位錯位造成的錯誤日常資料。系統會先檢查疑似資料筆數與範例，確認後才會刪除。</p>
+                                            <button onClick={handleCleanBadDailyImport} disabled={isProcessing} className="bubble-btn btn-danger w-full !text-sm">
+                                                <Icon name="trash-2" size={16}/> 檢查並清除錯誤匯入日常資料
+                                            </button>
                                         </div>
                                     </div>
                                 </div>
