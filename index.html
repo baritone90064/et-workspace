@@ -54,7 +54,7 @@
             background-image: radial-gradient(var(--pastel-blue) 1.5px, transparent 1.5px);
             background-size: 30px 30px;
             background-attachment: fixed;
-            zoom: 0.90; /* 將畫面整體縮小為 90% */
+            zoom: 0.80; /* 將畫面整體縮小為 80% */
         }
 
         .no-scrollbar::-webkit-scrollbar { display: none; }
@@ -1103,10 +1103,10 @@
                     {/* 篩選區間與條件設定 */}
                     <div className="bubble-card p-5 bg-white">
                         <h3 className="font-bold text-sm text-[var(--bubble-text)]/60 mb-3">資料篩選設定</h3>
-                        <div className="grid grid-cols-[1fr_auto_1fr] gap-2 items-center">
-                            <input type="date" value={analyticsStart} onChange={e=>setAnalyticsStart(e.target.value)} className="w-full min-w-0 !py-2 !px-3 !text-sm" />
-                            <span className="font-black text-gray-300">→</span>
-                            <input type="date" value={analyticsEnd} onChange={e=>setAnalyticsEnd(e.target.value)} className="w-full min-w-0 !py-2 !px-3 !text-sm" />
+                        <div className="flex items-center gap-1">
+                            <input type="date" value={analyticsStart} onChange={e=>setAnalyticsStart(e.target.value)} className="flex-1 min-w-0 !bg-white !px-1.5 !py-2 !text-xs tracking-tighter sm:text-sm text-center" />
+                            <span className="font-black text-gray-300 shrink-0 mx-0.5">→</span>
+                            <input type="date" value={analyticsEnd} onChange={e=>setAnalyticsEnd(e.target.value)} className="flex-1 min-w-0 !bg-white !px-1.5 !py-2 !text-xs tracking-tighter sm:text-sm text-center" />
                         </div>
                         {isAnalyticsDateInvalid && <div className="text-[var(--text-orange)] text-xs font-bold mt-2">截止日期不能早於起始日期！</div>}
                         
@@ -1306,10 +1306,10 @@
                                         </div>
                                         <div className="pt-2">
                                             <label className="font-black mb-2 block text-sm text-[var(--bubble-text)]/60">專案日期區間</label>
-                                            <div className="grid grid-cols-[1fr_auto_1fr] gap-2 items-center">
-                                                <input type="date" value={startDate} onChange={e=>setStartDate(e.target.value)} className="w-full min-w-0 !bg-white !px-2" />
-                                                <span className="font-black text-gray-300">→</span>
-                                                <input type="date" value={endDate} onChange={e=>setEndDate(e.target.value)} className="w-full min-w-0 !bg-white !px-2" />
+                                            <div className="flex items-center gap-1">
+                                                <input type="date" value={startDate} onChange={e=>setStartDate(e.target.value)} className="flex-1 min-w-0 !bg-white !px-1.5 !py-2 !text-xs tracking-tighter sm:text-sm text-center" />
+                                                <span className="font-black text-gray-300 shrink-0 mx-0.5">→</span>
+                                                <input type="date" value={endDate} onChange={e=>setEndDate(e.target.value)} className="flex-1 min-w-0 !bg-white !px-1.5 !py-2 !text-xs tracking-tighter sm:text-sm text-center" />
                                             </div>
                                             {isProjectDateInvalid && <div className="text-[var(--text-orange)] text-sm font-bold mt-2">結束日期不能早於起始日期！</div>}
                                         </div>
@@ -1400,21 +1400,21 @@
 
                     {/* 底部導覽列 */}
                     <nav className="fixed bottom-0 left-0 right-0 bottom-nav h-[85px] flex justify-center z-40 px-4">
-                        <div className="max-w-md w-full grid grid-cols-4 gap-1 text-center pt-3">
-                            <button onClick={()=>setActiveTab('daily')} className="flex flex-col items-center gap-1.5 group">
-                                <div className={`p-2 rounded-[14px] transition-all ${activeTab==='daily'?'bg-[var(--pastel-blue)] text-[var(--text-blue)] shadow-sm':'text-gray-400 group-hover:bg-gray-100'}`}><Icon name="wallet" size={24} /></div>
+                        <div className="max-w-md w-full grid grid-cols-4 gap-1 text-center pt-2">
+                            <button onClick={()=>setActiveTab('daily')} className="flex flex-col items-center gap-0.5 group">
+                                <div className={`p-1.5 rounded-[14px] transition-all ${activeTab==='daily'?'bg-[var(--pastel-blue)] text-[var(--text-blue)] shadow-sm':'text-gray-400 group-hover:bg-gray-100'}`}><Icon name="wallet" size={22} /></div>
                                 <span className={`text-[11px] font-black ${activeTab==='daily'?'text-[var(--text-blue)]':'text-gray-400'}`}>日常</span>
                             </button>
-                            <button onClick={()=>setActiveTab('projects')} className="flex flex-col items-center gap-1.5 group">
-                                <div className={`p-2 rounded-[14px] transition-all ${activeTab==='projects'?'bg-[var(--pastel-mint)] text-[var(--text-mint)] shadow-sm':'text-gray-400 group-hover:bg-gray-100'}`}><Icon name="folder" size={24} /></div>
+                            <button onClick={()=>setActiveTab('projects')} className="flex flex-col items-center gap-0.5 group">
+                                <div className={`p-1.5 rounded-[14px] transition-all ${activeTab==='projects'?'bg-[var(--pastel-mint)] text-[var(--text-mint)] shadow-sm':'text-gray-400 group-hover:bg-gray-100'}`}><Icon name="folder" size={22} /></div>
                                 <span className={`text-[11px] font-black ${activeTab==='projects'?'text-[var(--text-mint)]':'text-gray-400'}`}>專案</span>
                             </button>
-                            <button onClick={()=>setActiveTab('analytics')} className="flex flex-col items-center gap-1.5 group">
-                                <div className={`p-2 rounded-[14px] transition-all ${activeTab==='analytics'?'bg-[var(--pastel-yellow)] text-[var(--text-yellow)] shadow-sm':'text-gray-400 group-hover:bg-gray-100'}`}><Icon name="pie-chart" size={24} /></div>
+                            <button onClick={()=>setActiveTab('analytics')} className="flex flex-col items-center gap-0.5 group">
+                                <div className={`p-1.5 rounded-[14px] transition-all ${activeTab==='analytics'?'bg-[var(--pastel-yellow)] text-[var(--text-yellow)] shadow-sm':'text-gray-400 group-hover:bg-gray-100'}`}><Icon name="pie-chart" size={22} /></div>
                                 <span className={`text-[11px] font-black ${activeTab==='analytics'?'text-[var(--text-yellow)]':'text-gray-400'}`}>統計</span>
                             </button>
-                            <button onClick={()=>setActiveTab('settings')} className="flex flex-col items-center gap-1.5 group">
-                                <div className={`p-2 rounded-[14px] transition-all ${activeTab==='settings'?'bg-[var(--pastel-gray)] text-gray-700 shadow-sm':'text-gray-400 group-hover:bg-gray-100'}`}><Icon name="settings" size={24} /></div>
+                            <button onClick={()=>setActiveTab('settings')} className="flex flex-col items-center gap-0.5 group">
+                                <div className={`p-1.5 rounded-[14px] transition-all ${activeTab==='settings'?'bg-[var(--pastel-gray)] text-gray-700 shadow-sm':'text-gray-400 group-hover:bg-gray-100'}`}><Icon name="settings" size={22} /></div>
                                 <span className={`text-[11px] font-black ${activeTab==='settings'?'text-gray-700':'text-gray-400'}`}>設定</span>
                             </button>
                         </div>
