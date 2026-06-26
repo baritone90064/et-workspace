@@ -2,7 +2,7 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>E&T Workspace</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -76,16 +76,18 @@
             box-shadow: var(--shadow-float);
         }
 
-        /* 圓潤輸入框 */
+        /* 圓潤輸入框：針對 iOS Safari 優化寬度與內距 */
         input, select, textarea {
             background: #F8FAFC !important;
             border: 2px solid #E2E8F0 !important;
             border-radius: 20px !important;
-            padding: 14px 20px !important;
+            padding: 12px 16px !important; /* 縮減手機版內距，保留更多打字空間 */
             font-size: 16px !important; 
             font-weight: 600 !important;
             color: var(--bubble-text) !important;
             transition: all 0.2s ease;
+            box-sizing: border-box !important; /* 核心防呆：強制將內距算入寬度 */
+            max-width: 100% !important; /* 核心防呆：絕不允許超出父層寬度 */
         }
         input:focus, select:focus, textarea:focus {
             outline: none !important;
@@ -108,6 +110,8 @@
             align-items: center;
             justify-content: center;
             gap: 8px;
+            box-sizing: border-box !important;
+            max-width: 100%;
         }
         .bubble-btn:disabled { opacity: 0.5; cursor: not-allowed; }
         .bubble-btn:not(:disabled):active { transform: scale(0.95); }
@@ -135,7 +139,7 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            padding: 20px;
+            padding: 16px; /* 確保手機四周都有安全距離 */
         }
 
         /* 圓潤打勾方塊 (Checklist 用) */
@@ -873,20 +877,20 @@
                     
                     <form onSubmit={submitDailyExpense} className="bubble-card p-6 space-y-4 bg-white border-2 border-[var(--pastel-blue)]/30">
                         <div className="grid grid-cols-2 gap-3">
-                            <input type="date" value={dailyDate} onChange={e=>setDailyDate(e.target.value)} required />
-                            <input type="number" placeholder="金額 $" value={dailyAmount} onChange={e=>setDailyAmount(e.target.value)} required className="text-xl text-[var(--text-blue)] font-black" />
+                            <input type="date" value={dailyDate} onChange={e=>setDailyDate(e.target.value)} required className="w-full min-w-0 !max-w-full" />
+                            <input type="number" placeholder="金額 $" value={dailyAmount} onChange={e=>setDailyAmount(e.target.value)} required className="w-full min-w-0 !max-w-full text-xl text-[var(--text-blue)] font-black" />
                         </div>
                         <div className="grid grid-cols-2 gap-3">
-                            <select value={dailyItem} onChange={e=>setDailyItem(e.target.value)} required>
+                            <select value={dailyItem} onChange={e=>setDailyItem(e.target.value)} required className="w-full min-w-0 !max-w-full">
                                 <option value="">選擇分類...</option>
                                 {expenseItems.map(i => <option key={i.id} value={i.name}>{i.name}</option>)}
                             </select>
-                            <select value={dailyOwner} onChange={e=>setDailyOwner(e.target.value)} required>
+                            <select value={dailyOwner} onChange={e=>setDailyOwner(e.target.value)} required className="w-full min-w-0 !max-w-full">
                                 {members.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}
                             </select>
                         </div>
                         <div className="flex flex-col sm:flex-row gap-3">
-                            <input type="text" placeholder="寫點備註..." value={dailyDesc} onChange={e=>setDailyDesc(e.target.value)} className="w-full sm:flex-grow" />
+                            <input type="text" placeholder="寫點備註..." value={dailyDesc} onChange={e=>setDailyDesc(e.target.value)} className="w-full min-w-0 !max-w-full sm:flex-grow" />
                             <div className="flex gap-3 w-full sm:w-auto">
                                 <button type="submit" disabled={isProcessing} className="bubble-btn btn-primary flex-1 sm:flex-none px-8 whitespace-nowrap">
                                     {isProcessing ? <Icon name="loader" className="animate-spin" /> : "記一筆"}
@@ -1052,7 +1056,7 @@
                                                     {checklists.length === 0 && <div className="text-sm font-bold text-gray-400">目前沒有清單項目，在下方新增吧！</div>}
                                                 </div>
                                                 <div className="flex gap-2">
-                                                    <input type="text" placeholder="新增準備事項、裝備清單..." value={newChecklistText[t.id] || ''} onChange={e=>setNewChecklistText({...newChecklistText, [t.id]: e.target.value})} onKeyDown={e=>{if(e.key==='Enter') addChecklistItem(t.id);}} className="flex-grow !py-2 !px-4 !text-sm !bg-gray-50 border-none" />
+                                                    <input type="text" placeholder="新增準備事項、裝備清單..." value={newChecklistText[t.id] || ''} onChange={e=>setNewChecklistText({...newChecklistText, [t.id]: e.target.value})} onKeyDown={e=>{if(e.key==='Enter') addChecklistItem(t.id);}} className="flex-grow min-w-0 !max-w-full !py-2 !px-4 !text-sm !bg-gray-50 border-none" />
                                                     <button onClick={()=>addChecklistItem(t.id)} className="bubble-btn btn-mint !py-2 !px-4 shadow-none"><Icon name="plus" size={18}/></button>
                                                 </div>
                                             </div>
@@ -1122,18 +1126,18 @@
                     <div className="bubble-card p-5 bg-white">
                         <h3 className="font-bold text-sm text-[var(--bubble-text)]/60 mb-3">資料篩選設定</h3>
                         <div className="flex items-center gap-1">
-                            <input type="date" value={analyticsStart} onChange={e=>setAnalyticsStart(e.target.value)} className="flex-1 min-w-0 !bg-white !px-1.5 !py-2 !text-xs tracking-tighter sm:text-sm text-center" />
+                            <input type="date" value={analyticsStart} onChange={e=>setAnalyticsStart(e.target.value)} className="flex-1 min-w-0 !max-w-full !bg-white !px-1 sm:!px-1.5 !py-2 !text-[11px] sm:text-sm text-center" />
                             <span className="font-black text-gray-300 shrink-0 mx-0.5">→</span>
-                            <input type="date" value={analyticsEnd} onChange={e=>setAnalyticsEnd(e.target.value)} className="flex-1 min-w-0 !bg-white !px-1.5 !py-2 !text-xs tracking-tighter sm:text-sm text-center" />
+                            <input type="date" value={analyticsEnd} onChange={e=>setAnalyticsEnd(e.target.value)} className="flex-1 min-w-0 !max-w-full !bg-white !px-1 sm:!px-1.5 !py-2 !text-[11px] sm:text-sm text-center" />
                         </div>
                         {isAnalyticsDateInvalid && <div className="text-[var(--text-orange)] text-xs font-bold mt-2">截止日期不能早於起始日期！</div>}
                         
                         <div className="flex items-center gap-2 mt-3">
-                            <select value={analyticsCatFilter} onChange={e=>setAnalyticsCatFilter(e.target.value)} className="w-full !py-2 !px-3 !text-sm">
+                            <select value={analyticsCatFilter} onChange={e=>setAnalyticsCatFilter(e.target.value)} className="w-full min-w-0 !max-w-full !py-2 !px-3 !text-sm">
                                 <option value="all">所有費用分類</option>
                                 {expenseItems.map(i => <option key={i.id} value={i.name}>{i.name}</option>)}
                             </select>
-                            <select value={analyticsOwnerFilter} onChange={e=>setAnalyticsOwnerFilter(e.target.value)} className="w-full !py-2 !px-3 !text-sm">
+                            <select value={analyticsOwnerFilter} onChange={e=>setAnalyticsOwnerFilter(e.target.value)} className="w-full min-w-0 !max-w-full !py-2 !px-3 !text-sm">
                                 <option value="all">所有成員</option>
                                 {members.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}
                             </select>
@@ -1263,7 +1267,7 @@
                     {/* 客製化 Confirm Dialog */}
                     {confirmDialog.isOpen && (
                         <div className="modal-overlay">
-                            <div className="bubble-card bg-white p-6 w-full max-w-sm animate-in zoom-in-95 duration-200 shadow-2xl">
+                            <div className="bubble-card bg-white p-6 w-full max-w-sm animate-in zoom-in-95 duration-200 shadow-2xl mx-4">
                                 <h3 className="font-black text-2xl mb-2 text-[var(--text-orange)]">{confirmDialog.title}</h3>
                                 <p className="font-bold text-[var(--bubble-text)]/70 mb-6">{confirmDialog.message}</p>
                                 <div className="flex gap-3">
@@ -1277,9 +1281,9 @@
                     {/* 客製化 Input Dialog */}
                     {inputDialog.isOpen && (
                         <div className="modal-overlay">
-                            <div className="bubble-card bg-[var(--pastel-blue)] p-6 w-full max-w-sm animate-in zoom-in-95 duration-200 shadow-2xl border-none">
+                            <div className="bubble-card bg-[var(--pastel-blue)] p-6 w-full max-w-sm animate-in zoom-in-95 duration-200 shadow-2xl border-none mx-4">
                                 <h3 className="font-black text-2xl mb-4 text-[var(--text-blue)] drop-shadow-sm">{inputDialog.title}</h3>
-                                <input className="w-full mb-6 !border-none !bg-white" value={inputDialog.value} onChange={e=>setInputDialog({...inputDialog, value: e.target.value})} placeholder={inputDialog.placeholder} autoFocus />
+                                <input className="w-full min-w-0 !max-w-full mb-6 !border-none !bg-white" value={inputDialog.value} onChange={e=>setInputDialog({...inputDialog, value: e.target.value})} placeholder={inputDialog.placeholder} autoFocus />
                                 <div className="flex gap-3">
                                     <button onClick={()=>setInputDialog({isOpen:false})} className="bubble-btn bg-white/40 text-[var(--text-blue)] flex-1 py-3 hover:bg-white/60">取消</button>
                                     <button onClick={()=>{ if(inputDialog.value.trim()){ inputDialog.onConfirm(inputDialog.value.trim()); setInputDialog({isOpen:false}); } }} className="bubble-btn bg-white text-[var(--text-blue)] flex-1 py-3 shadow-lg">確認儲存</button>
@@ -1291,26 +1295,26 @@
                     {/* 日常修改 Modal (新加入，讓使用者編輯時不會失去原有位置) */}
                     {dailyEditData && (
                         <div className="modal-overlay" onClick={() => setDailyEditData(null)}>
-                            <div className="bubble-card bg-white w-full max-w-sm overflow-hidden animate-in zoom-in-95 duration-200" onClick={e=>e.stopPropagation()}>
+                            <div className="bubble-card bg-white w-full max-w-sm overflow-hidden animate-in zoom-in-95 duration-200 mx-4" onClick={e=>e.stopPropagation()}>
                                 <div className="p-4 border-b-2 border-gray-50 flex justify-between items-center bg-[var(--pastel-blue)]/30">
                                     <h3 className="font-black text-lg text-[var(--text-blue)]">編輯日常流水帳</h3>
                                     <button onClick={() => setDailyEditData(null)} className="p-1.5 bg-white rounded-full text-gray-500 hover:bg-gray-100"><Icon name="x" size={18}/></button>
                                 </div>
-                                <form onSubmit={submitDailyEdit} className="p-6 space-y-4">
+                                <form onSubmit={submitDailyEdit} className="p-5 sm:p-6 space-y-4">
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                        <input type="date" value={dailyEditData.date} onChange={e=>setDailyEditData({...dailyEditData, date: e.target.value})} required className="w-full" />
-                                        <input type="number" placeholder="金額 $" value={dailyEditData.amount} onChange={e=>setDailyEditData({...dailyEditData, amount: e.target.value})} required className="w-full font-black text-xl text-[var(--text-blue)]" />
+                                        <input type="date" value={dailyEditData.date} onChange={e=>setDailyEditData({...dailyEditData, date: e.target.value})} required className="w-full min-w-0 !max-w-full" />
+                                        <input type="number" placeholder="金額 $" value={dailyEditData.amount} onChange={e=>setDailyEditData({...dailyEditData, amount: e.target.value})} required className="w-full min-w-0 !max-w-full font-black text-xl text-[var(--text-blue)]" />
                                     </div>
                                     <div className="grid grid-cols-2 gap-3">
-                                        <select value={dailyEditData.item} onChange={e=>setDailyEditData({...dailyEditData, item: e.target.value})} required>
+                                        <select value={dailyEditData.item} onChange={e=>setDailyEditData({...dailyEditData, item: e.target.value})} required className="w-full min-w-0 !max-w-full">
                                             <option value="">選擇分類...</option>
                                             {expenseItems.map(i => <option key={i.id} value={i.name}>{i.name}</option>)}
                                         </select>
-                                        <select value={dailyEditData.owner} onChange={e=>setDailyEditData({...dailyEditData, owner: e.target.value})} required>
+                                        <select value={dailyEditData.owner} onChange={e=>setDailyEditData({...dailyEditData, owner: e.target.value})} required className="w-full min-w-0 !max-w-full">
                                             {members.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}
                                         </select>
                                     </div>
-                                    <input placeholder="備註 (選填)..." value={dailyEditData.desc} onChange={e=>setDailyEditData({...dailyEditData, desc: e.target.value})} className="w-full" />
+                                    <input placeholder="備註 (選填)..." value={dailyEditData.desc} onChange={e=>setDailyEditData({...dailyEditData, desc: e.target.value})} className="w-full min-w-0 !max-w-full" />
                                     <button type="submit" disabled={isProcessing} className="bubble-btn btn-primary w-full py-3 mt-4">儲存修改</button>
                                 </form>
                             </div>
@@ -1319,16 +1323,16 @@
 
                     {/* 專案新增/編輯 Modal */}
                     {isProjectFormOpen && (
-                        <div className="modal-overlay p-4 sm:p-6" onClick={() => setIsProjectFormOpen(false)}>
-                            <div className="bubble-card bg-white w-full max-w-lg flex flex-col h-[85vh] animate-in zoom-in-95 duration-200 overflow-hidden" onClick={e=>e.stopPropagation()}>
+                        <div className="modal-overlay" onClick={() => setIsProjectFormOpen(false)}>
+                            <div className="bubble-card bg-white w-full max-w-lg flex flex-col h-[85vh] animate-in zoom-in-95 duration-200 overflow-hidden mx-4" onClick={e=>e.stopPropagation()}>
                                 <div className="p-5 border-b-2 border-gray-50 flex justify-between items-center bg-white z-10">
                                     <h3 className="font-black text-2xl text-[var(--bubble-text)]">{projectEditingId ? "編輯專案" : "建立新專案"}</h3>
                                     <button onClick={() => setIsProjectFormOpen(false)} className="p-2 bg-gray-50 rounded-full text-gray-500 hover:bg-gray-100"><Icon name="x" size={20}/></button>
                                 </div>
-                                <div className="p-6 overflow-y-auto space-y-6 flex-grow bg-[#F8FAFC]/50">
+                                <div className="p-4 sm:p-6 overflow-y-auto space-y-6 flex-grow bg-[#F8FAFC]/50">
                                     <div>
                                         <label className="font-black mb-2 block text-sm text-[var(--bubble-text)]/60">專案名稱</label>
-                                        <input className="w-full text-xl !bg-white" placeholder="輸入名稱..." value={taskText} onChange={e=>setTaskText(e.target.value)} />
+                                        <input className="w-full min-w-0 !max-w-full text-xl !bg-white" placeholder="輸入名稱..." value={taskText} onChange={e=>setTaskText(e.target.value)} />
                                     </div>
                                     
                                     <div className="bg-white p-5 rounded-[24px] shadow-sm border border-gray-100 space-y-4">
@@ -1347,16 +1351,16 @@
                                         </div>
                                         <div className="pt-2">
                                             <label className="font-black mb-2 block text-sm text-[var(--bubble-text)]/60">類別</label>
-                                            <select className="w-full !bg-white" value={category} onChange={e=>setCategory(e.target.value)}>
+                                            <select className="w-full min-w-0 !max-w-full !bg-white" value={category} onChange={e=>setCategory(e.target.value)}>
                                                 {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
                                             </select>
                                         </div>
                                         <div className="pt-2">
                                             <label className="font-black mb-2 block text-sm text-[var(--bubble-text)]/60">專案日期區間</label>
                                             <div className="flex items-center gap-1">
-                                                <input type="date" value={startDate} onChange={e=>setStartDate(e.target.value)} className="flex-1 min-w-0 !bg-white !px-1.5 !py-2 !text-xs tracking-tighter sm:text-sm text-center" />
+                                                <input type="date" value={startDate} onChange={e=>setStartDate(e.target.value)} className="flex-1 min-w-0 !max-w-full !bg-white !px-1.5 !py-2 !text-xs tracking-tighter sm:text-sm text-center" />
                                                 <span className="font-black text-gray-300 shrink-0 mx-0.5">→</span>
-                                                <input type="date" value={endDate} onChange={e=>setEndDate(e.target.value)} className="flex-1 min-w-0 !bg-white !px-1.5 !py-2 !text-xs tracking-tighter sm:text-sm text-center" />
+                                                <input type="date" value={endDate} onChange={e=>setEndDate(e.target.value)} className="flex-1 min-w-0 !max-w-full !bg-white !px-1.5 !py-2 !text-xs tracking-tighter sm:text-sm text-center" />
                                             </div>
                                             {isProjectDateInvalid && <div className="text-[var(--text-orange)] text-sm font-bold mt-2">結束日期不能早於起始日期！</div>}
                                         </div>
@@ -1370,8 +1374,8 @@
                                         <div className="space-y-3">
                                             {links.map((li, i) => (
                                                 <div key={i} className="flex gap-2">
-                                                    <input className="w-1/3 text-sm !bg-gray-50" placeholder="標籤" value={li.label} onChange={e => { const n = [...links]; n[i].label = e.target.value; setLinks(n); }} />
-                                                    <input className="flex-grow text-sm w-full !bg-gray-50" placeholder="網址 (https://...)" value={li.url} onChange={e => { const n = [...links]; n[i].url = e.target.value; setLinks(n); }} />
+                                                    <input className="w-1/3 min-w-0 !max-w-full text-sm !bg-gray-50" placeholder="標籤" value={li.label} onChange={e => { const n = [...links]; n[i].label = e.target.value; setLinks(n); }} />
+                                                    <input className="flex-grow min-w-0 !max-w-full text-sm w-full !bg-gray-50" placeholder="網址 (https://...)" value={li.url} onChange={e => { const n = [...links]; n[i].url = e.target.value; setLinks(n); }} />
                                                     <button type="button" onClick={() => setLinks(links.filter((_, idx) => idx !== i))} className="p-2 text-[var(--pastel-orange)] bg-white rounded-xl shadow-sm"><Icon name="trash-2" size={18}/></button>
                                                 </div>
                                             ))}
@@ -1408,7 +1412,7 @@
 
                                     <div className="bg-white p-5 rounded-[24px] shadow-sm border border-gray-100">
                                         <label className="font-black mb-2 block text-sm text-[var(--bubble-text)]/60">詳細備註</label>
-                                        <textarea className="w-full min-h-[100px] !bg-gray-50" placeholder="寫些什麼..." value={note} onChange={e=>setNote(e.target.value)}></textarea>
+                                        <textarea className="w-full min-w-0 !max-w-full min-h-[100px] !bg-gray-50" placeholder="寫些什麼..." value={note} onChange={e=>setNote(e.target.value)}></textarea>
                                     </div>
                                 </div>
                                 <div className="p-5 border-t-2 border-gray-50 bg-white">
@@ -1423,22 +1427,22 @@
                     {/* 專案記單筆花費 Modal (降一列垂直排列解決手機板破圖) */}
                     {expenseModalTask && (
                         <div className="modal-overlay" onClick={() => setExpenseModalTask(null)}>
-                            <div className="bubble-card bg-white w-full max-w-sm overflow-hidden animate-in zoom-in-95 duration-200" onClick={e=>e.stopPropagation()}>
+                            <div className="bubble-card bg-white w-full max-w-sm overflow-hidden animate-in zoom-in-95 duration-200 mx-4" onClick={e=>e.stopPropagation()}>
                                 <div className="p-4 border-b-2 border-gray-50 flex justify-between items-center bg-[var(--pastel-mint)]/30">
                                     <h3 className="font-black text-lg text-[var(--text-mint)]">{projExpEditingIdx !== null ? '編輯專案費用' : '記一筆專案費用'}</h3>
                                     <button onClick={() => setExpenseModalTask(null)} className="p-1.5 bg-white rounded-full text-gray-500 hover:bg-gray-100"><Icon name="x" size={18}/></button>
                                 </div>
-                                <form onSubmit={submitProjectExpense} className="p-6 space-y-4">
+                                <form onSubmit={submitProjectExpense} className="p-5 sm:p-6 space-y-4">
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                        <input type="date" value={projExpDate} onChange={e=>setProjExpDate(e.target.value)} required className="w-full" />
-                                        <input type="number" placeholder="金額 $" value={projExpAmount} onChange={e=>setProjExpAmount(e.target.value)} required className="w-full font-black text-xl text-[var(--text-mint)]" />
+                                        <input type="date" value={projExpDate} onChange={e=>setProjExpDate(e.target.value)} required className="w-full min-w-0 !max-w-full" />
+                                        <input type="number" placeholder="金額 $" value={projExpAmount} onChange={e=>setProjExpAmount(e.target.value)} required className="w-full min-w-0 !max-w-full font-black text-xl text-[var(--text-mint)]" />
                                     </div>
-                                    <select className="w-full" value={projExpItem} onChange={e=>setProjExpItem(e.target.value)} required>
+                                    <select className="w-full min-w-0 !max-w-full" value={projExpItem} onChange={e=>setProjExpItem(e.target.value)} required>
                                         <option value="">選擇分類...</option>
                                         {expenseItems.map(opt => <option key={opt.id} value={opt.name}>{opt.name}</option>)}
                                         <option value="其他">其他</option>
                                     </select>
-                                    <input placeholder="備註 (選填)..." value={projExpDesc} onChange={e=>setProjExpDesc(e.target.value)} className="w-full" />
+                                    <input placeholder="備註 (選填)..." value={projExpDesc} onChange={e=>setProjExpDesc(e.target.value)} className="w-full min-w-0 !max-w-full" />
                                     <button type="submit" disabled={isProcessing} className="bubble-btn btn-mint w-full py-3 mt-4">{projExpEditingIdx !== null ? '儲存修改' : '加入明細'}</button>
                                 </form>
                             </div>
