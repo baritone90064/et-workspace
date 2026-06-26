@@ -457,7 +457,7 @@
             // --- Filter & Sort States ---
             const [dailySort, setDailySort] = useState('desc'); 
             const [dailyMonthFilter, setDailyMonthFilter] = useState(getCurrentMonthString()); 
-            const [projectSort, setProjectSort] = useState('desc'); 
+            const [projectSort, setProjectSort] = useState('asc'); 
             const [projectKeyword, setProjectKeyword] = useState('');
             const [projectYearFilter, setProjectYearFilter] = useState('all');
             const [projectMonthFilter, setProjectMonthFilter] = useState('all');
@@ -515,6 +515,15 @@
             
             // Project Checklist State 
             const [newChecklistText, setNewChecklistText] = useState({});
+
+            // 日常記帳成員選項：保留原本單一成員，同時提供 Terry;Eric 共同記帳選項
+            const dailyOwnerOptions = useMemo(() => {
+                const names = members.map(m => m.name).filter(Boolean);
+                const comboOwner = 'Terry;Eric';
+                const hasTerry = names.includes('Terry');
+                const hasEric = names.includes('Eric');
+                return hasTerry && hasEric && !names.includes(comboOwner) ? [...names, comboOwner] : names;
+            }, [members]);
 
             const markSourceLoaded = (key) => {
                 setLoadedSources(prev => prev[key] ? prev : ({ ...prev, [key]: true }));
@@ -629,18 +638,17 @@
             }, [user, loadedSources]);
 
             useEffect(() => {
-                if (members.length === 0) return;
-                const memberNames = members.map(m => m.name);
+                if (dailyOwnerOptions.length === 0) return;
                 const savedOwner = getSavedDailyOwner();
-                const nextOwner = savedOwner && memberNames.includes(savedOwner)
+                const nextOwner = savedOwner && dailyOwnerOptions.includes(savedOwner)
                     ? savedOwner
-                    : (dailyOwner && memberNames.includes(dailyOwner) ? dailyOwner : members[0].name);
+                    : (dailyOwner && dailyOwnerOptions.includes(dailyOwner) ? dailyOwner : dailyOwnerOptions[0]);
 
-                if (!dailyOwner || !memberNames.includes(dailyOwner)) {
+                if (!dailyOwner || !dailyOwnerOptions.includes(dailyOwner)) {
                     setDailyOwner(nextOwner);
                     saveDailyOwner(nextOwner);
                 }
-            }, [members]);
+            }, [dailyOwnerOptions]);
 
             useEffect(() => {
                 setIsAnalyticsDateInvalid(analyticsStart && analyticsEnd && analyticsEnd < analyticsStart);
@@ -1517,7 +1525,7 @@
                                 {expenseItems.map(i => <option key={i.id} value={i.name}>{i.name}</option>)}
                             </select>
                             <select value={dailyOwner} onChange={handleDailyOwnerChange} required className="w-full min-w-0 !max-w-full">
-                                {members.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}
+                                {dailyOwnerOptions.map(o => <option key={o} value={o}>{o}</option>)}
                             </select>
                         </div>
                         <div className="flex flex-col sm:flex-row gap-3">
@@ -1817,7 +1825,7 @@
                             </select>
                             <select value={analyticsOwnerFilter} onChange={e=>setAnalyticsOwnerFilter(e.target.value)} className="w-full min-w-0 !max-w-full !py-2 !px-3 !text-sm">
                                 <option value="all">所有成員</option>
-                                {members.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}
+                                {dailyOwnerOptions.map(o => <option key={o} value={o}>{o}</option>)}
                             </select>
                         </div>
                     </div>
@@ -2007,7 +2015,7 @@
                                             {expenseItems.map(i => <option key={i.id} value={i.name}>{i.name}</option>)}
                                         </select>
                                         <select value={dailyEditData.owner} onChange={e=>setDailyEditData({...dailyEditData, owner: e.target.value})} required className="w-full min-w-0 !max-w-full">
-                                            {members.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}
+                                            {dailyOwnerOptions.map(o => <option key={o} value={o}>{o}</option>)}
                                         </select>
                                     </div>
                                     <input placeholder="備註 (選填)..." value={dailyEditData.desc} onChange={e=>setDailyEditData({...dailyEditData, desc: e.target.value})} className="w-full min-w-0 !max-w-full" />
