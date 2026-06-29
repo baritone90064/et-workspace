@@ -440,7 +440,7 @@
             const [isInitialLoading, setIsInitialLoading] = useState(true);
             const [loadedSources, setLoadedSources] = useState({
                 daily: false,
-                tasks: false,
+                projects: false,
                 categories: false,
                 expenseItems: false,
                 members: false
@@ -449,7 +449,7 @@
             // --- Data States ---
             const [dailyExpenses, setDailyExpenses] = useState([]);
             const [analyticsDailyExpenses, setAnalyticsDailyExpenses] = useState([]);
-            const [tasks, setTasks] = useState([]); // Projects
+            const [projects, setProjects] = useState([]);
             const [categories, setCategories] = useState([]);
             const [expenseItems, setExpenseItems] = useState([]);
             const [members, setMembers] = useState([]);
@@ -461,6 +461,8 @@
             const [isDailyLoading, setIsDailyLoading] = useState(false);
             const [isAnalyticsLoading, setIsAnalyticsLoading] = useState(false);
             const chartRefs = useRef({ trend: null, cat: null });
+            const trendCanvasRef = useRef(null);
+            const catCanvasRef = useRef(null);
             
             // --- Filter & Sort States ---
             const [dailySort, setDailySort] = useState('desc'); 
@@ -498,21 +500,23 @@
             // Project Form
             const [isProjectFormOpen, setIsProjectFormOpen] = useState(false);
             const [projectEditingId, setProjectEditingId] = useState(null);
-            const [taskText, setTaskText] = useState('');
+            const [projectText, setProjectText] = useState('');
             const [owners, setOwners] = useState([]);
             const [category, setCategory] = useState('');
             const [note, setNote] = useState('');
             const [startDate, setStartDate] = useState('');
             const [endDate, setEndDate] = useState('');
+            const [showInCalendar, setShowInCalendar] = useState(true);
             const [links, setLinks] = useState([]);
-            const [images, setImages] = useState([]); 
+            const [images, setImages] = useState([]);
+            const [projectOriginalImages, setProjectOriginalImages] = useState([]);
             const [isUploadingImage, setIsUploadingImage] = useState(false);
 
             const isProjectDateInvalid = startDate && endDate && endDate < startDate;
 
             // Project Detail
             const [expandedProject, setExpandedProject] = useState({});
-            const [expenseModalTask, setExpenseModalTask] = useState(null);
+            const [expenseModalProject, setExpenseModalProject] = useState(null);
             
             // Project Single Expense
             const [projExpDate, setProjExpDate] = useState(getLocalDateString());
@@ -526,6 +530,7 @@
             const [checklistAttachmentModal, setChecklistAttachmentModal] = useState(null);
             const [checklistAttachmentLinks, setChecklistAttachmentLinks] = useState([]);
             const [checklistAttachmentImages, setChecklistAttachmentImages] = useState([]);
+            const [checklistAttachmentOriginalImages, setChecklistAttachmentOriginalImages] = useState([]);
             const [isUploadingChecklistImage, setIsUploadingChecklistImage] = useState(false);
 
             // 日常記帳成員選項：保留原本單一成員，同時提供 Terry； Eric 共同記帳選項
@@ -564,7 +569,7 @@
             useEffect(() => {
                 if (!user) return;
                 setIsInitialLoading(true);
-                setLoadedSources({ daily: false, tasks: false, categories: false, expenseItems: false, members: false });
+                setLoadedSources({ daily: false, projects: false, categories: false, expenseItems: false, members: false });
 
                 const path = db.collection('artifacts').doc(appId).collection('public').doc('data');
                 
@@ -575,12 +580,12 @@
                 };
 
                 // 專案資料目前仍保留即時監聽：專案筆數通常遠少於日常流水帳，且行事曆/進行中/已結束需要即時同步。
-                const unsubTasks = path.collection('tasks').onSnapshot(
+                const unsubProjects = path.collection('tasks').onSnapshot(
                     snap => {
-                        setTasks(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-                        markSourceLoaded('tasks');
+                        setProjects(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+                        markSourceLoaded('projects');
                     },
-                    err => { console.error('讀取專案資料失敗:', err); markSourceLoaded('tasks'); }
+                    err => { console.error('讀取專案資料失敗:', err); markSourceLoaded('projects'); }
                 );
                 
                 const unsubCats = path.collection('categories').onSnapshot(
@@ -613,7 +618,7 @@
                     err => { console.error('讀取成員失敗:', err); markSourceLoaded('members'); }
                 );
 
-                return () => { unsubTasks(); unsubCats(); unsubExpItems(); unsubMembers(); };
+                return () => { unsubProjects(); unsubCats(); unsubExpItems(); unsubMembers(); };
             }, [user]);
 
             useEffect(() => {
@@ -711,7 +716,10 @@
                     saveDailyOwner(dailyOwner);
                     setDailyDate(getLocalDateString());
                     setDailyAmount(''); setDailyDesc('');
-                } catch (err) { console.error('新增日常記帳失敗:', err); }
+                } catch (err) {
+                    console.error('新增日常記帳失敗:', err);
+                    alert('新增日常記帳失敗，請檢查網路後再試一次。');
+                }
                 setIsProcessing(false);
             };
 
@@ -726,7 +734,10 @@
                     const editedMonth = (dailyEditData.date || '').substring(0, 7);
                     if (editedMonth && dailyMonthFilter !== 'all' && dailyMonthFilter !== editedMonth) setDailyMonthFilter(editedMonth);
                     setDailyEditData(null);
-                } catch (err) {}
+                } catch (err) {
+                    console.error('更新日常記帳失敗:', err);
+                    alert('更新日常記帳失敗，請檢查網路後再試一次。');
+                }
                 setIsProcessing(false);
             };
 
@@ -734,97 +745,124 @@
                 const fileName = `images/${Date.now()}_${Math.random().toString(36).substr(2, 9)}.jpg`;
                 const storageRef = storage.ref().child(fileName);
                 const snapshot = await storageRef.putString(base64Str, 'data_url');
-                const downloadURL = await snapshot.ref.getDownloadURL();
-                return downloadURL;
+                return snapshot.ref.getDownloadURL();
             };
 
-            const processAndUploadFile = (file) => {
-                return new Promise((resolve, reject) => {
-                    const reader = new FileReader();
-                    reader.onload = async (re) => {
-                        try {
-                            const compressed = await compressImage(re.target.result);
-                            const url = await uploadImageToStorage(compressed); 
-                            resolve(url);
-                        } catch (error) {
-                            reject(error);
-                        }
-                    };
-                    reader.onerror = reject;
-                    reader.readAsDataURL(file);
-                });
+            const deleteStorageImage = async (url) => {
+                if (!url || typeof url !== 'string') return;
+                try {
+                    await storage.refFromURL(url).delete();
+                } catch (error) {
+                    if (error?.code !== 'storage/object-not-found') console.warn('刪除 Storage 圖片失敗:', error);
+                }
+            };
+
+            const deleteStorageImages = async (urls = []) => {
+                const uniqueUrls = Array.from(new Set((urls || []).filter(Boolean)));
+                await Promise.all(uniqueUrls.map(deleteStorageImage));
+            };
+
+            const processAndUploadFile = (file) => new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = async (re) => {
+                    try {
+                        const compressed = await compressImage(re.target.result);
+                        resolve(await uploadImageToStorage(compressed));
+                    } catch (error) { reject(error); }
+                };
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
+            });
+
+            const uploadImageFiles = async ({ files, setTargetImages, setUploading, errorMessage }) => {
+                const imageFiles = Array.from(files || []).filter(Boolean);
+                if (imageFiles.length === 0) return;
+                setUploading(true);
+                try {
+                    const urls = await Promise.all(imageFiles.map(processAndUploadFile));
+                    setTargetImages(prev => [...prev, ...urls]);
+                } catch (error) {
+                    console.error(errorMessage, error);
+                    alert(`${errorMessage}，請檢查權限或網路連線。`);
+                } finally { setUploading(false); }
+            };
+
+            const getImageFilesFromPaste = (e) => {
+                const items = e.clipboardData?.items || [];
+                const files = [];
+                for (let i = 0; i < items.length; i++) {
+                    if (items[i].type.indexOf('image') !== -1) files.push(items[i].getAsFile());
+                }
+                return files;
             };
 
             const handleImageUpload = async (e) => {
-                const files = Array.from(e.target.files);
-                if (files.length === 0) return;
-                
-                setIsUploadingImage(true);
-                try {
-                    const urls = await Promise.all(files.map(processAndUploadFile));
-                    setImages(prev => [...prev, ...urls]);
-                } catch (error) {
-                    console.error("圖片上傳失敗:", error);
-                    alert("圖片上傳失敗，請檢查權限或網路連線");
-                } finally {
-                    setIsUploadingImage(false);
-                }
+                await uploadImageFiles({ files: e.target.files, setTargetImages: setImages, setUploading: setIsUploadingImage, errorMessage: '專案圖片上傳失敗' });
                 e.target.value = '';
             };
 
             const handlePaste = async (e) => {
-                const items = e.clipboardData.items;
-                const files = [];
-                for (let i = 0; i < items.length; i++) {
-                    if (items[i].type.indexOf("image") !== -1) {
-                        files.push(items[i].getAsFile());
-                    }
-                }
+                const files = getImageFilesFromPaste(e);
                 if (files.length === 0) return;
-                
-                setIsUploadingImage(true);
-                try {
-                    const urls = await Promise.all(files.map(processAndUploadFile));
-                    setImages(prev => [...prev, ...urls]);
-                } catch (error) {
-                    console.error("圖片上傳失敗:", error);
-                    alert("圖片上傳失敗");
-                } finally {
-                    setIsUploadingImage(false);
-                }
+                e.preventDefault();
+                await uploadImageFiles({ files, setTargetImages: setImages, setUploading: setIsUploadingImage, errorMessage: '專案圖片貼上失敗' });
+            };
+
+            const getRemovedImages = (originalImages = [], nextImages = []) => {
+                const nextSet = new Set(nextImages || []);
+                return (originalImages || []).filter(url => !nextSet.has(url));
             };
 
             // --- 專案相關 ---
             const submitProject = async (e) => {
                 e.preventDefault();
-                if (!taskText.trim() || isProcessing || isProjectDateInvalid || isUploadingImage) return;
+                if (!projectText.trim() || isProcessing || isProjectDateInvalid || isUploadingImage) return;
                 setIsProcessing(true);
+                const cleanImages = images.filter(img => String(img || '').trim() !== '');
                 const data = {
-                    text: taskText.trim(), owners, category: category || (categories[0]?.name || ''), note, startDate, endDate, 
-                    images: images.filter(img => img.trim() !== ''), links: links.filter(l => l.url.trim() !== ''), updatedAt: new Date().toISOString()
+                    text: projectText.trim(), owners, category: category || (categories[0]?.name || ''), note, startDate, endDate,
+                    showInCalendar,
+                    images: cleanImages,
+                    links: links.map(l => ({ label: (l.label || '').trim(), url: (l.url || '').trim() })).filter(l => l.url),
+                    updatedAt: new Date().toISOString()
                 };
                 try {
                     const ref = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('tasks');
-                    if (projectEditingId) await ref.doc(projectEditingId).update(data);
-                    else await ref.add({ ...data, completed: false, checklist: [], createdAt: new Date().toISOString() });
-                    setIsProjectFormOpen(false); resetProjectForm();
-                } catch (err) {}
+                    if (projectEditingId) {
+                        await ref.doc(projectEditingId).update(data);
+                        await deleteStorageImages(getRemovedImages(projectOriginalImages, cleanImages));
+                    } else {
+                        await ref.add({ ...data, completed: false, checklist: [], createdAt: new Date().toISOString() });
+                    }
+                    setIsProjectFormOpen(false);
+                    resetProjectForm();
+                } catch (err) {
+                    console.error('儲存專案失敗:', err);
+                    alert('儲存專案失敗，請檢查網路後再試一次。');
+                }
                 setIsProcessing(false);
             };
             
             const resetProjectForm = () => {
-                setTaskText(''); setNote(''); setStartDate(''); setEndDate(''); setImages([]); setLinks([]); setProjectEditingId(null);
+                setProjectText(''); setNote(''); setStartDate(''); setEndDate(''); setShowInCalendar(true); setImages([]); setProjectOriginalImages([]); setLinks([]); setProjectEditingId(null);
                 if (members.length > 0) setOwners([members[0].name]); if (categories.length > 0) setCategory(categories[0].name);
+            };
+
+            const closeProjectForm = async () => {
+                const newlyUploadedImages = (images || []).filter(url => !(projectOriginalImages || []).includes(url));
+                await deleteStorageImages(newlyUploadedImages);
+                setIsProjectFormOpen(false);
+                resetProjectForm();
             };
             
             const openProjectEdit = (t) => {
-                setTaskText(t.text); setOwners(t.owners || []); setCategory(t.category || ''); setNote(t.note || '');
-                setStartDate(t.startDate || ''); setEndDate(t.endDate || ''); setImages(t.images || []); setLinks(t.links || []); setProjectEditingId(t.id);
+                setProjectText(t.text); setOwners(t.owners || []); setCategory(t.category || ''); setNote(t.note || '');
+                setStartDate(t.startDate || ''); setEndDate(t.endDate || ''); setShowInCalendar(t.showInCalendar !== false); setImages(t.images || []); setProjectOriginalImages(t.images || []); setLinks(t.links || []); setProjectEditingId(t.id);
                 setIsProjectFormOpen(true);
             };
 
             const openExpenseModal = (t, idx = null) => {
-                setExpenseModalTask(t);
+                setExpenseModalProject(t);
                 if (idx !== null && t.expenses && t.expenses[idx]) {
                     const exp = t.expenses[idx];
                     setProjExpDate(exp.date);
@@ -846,72 +884,114 @@
                 if (!projExpAmount || !projExpItem || isProcessing) return;
                 setIsProcessing(true);
                 try {
-                    const newExp = { date: projExpDate, amount: projExpAmount, item: projExpItem, desc: projExpDesc };
-                    const currentTask = tasks.find(t => t.id === expenseModalTask.id);
-                    let updatedExpenses = [...(currentTask.expenses || [])];
+                    const newExp = { date: projExpDate, amount: parseFloat(projExpAmount) || 0, item: projExpItem, desc: projExpDesc };
+                    const currentProject = projects.find(t => t.id === expenseModalProject.id);
+                    let updatedExpenses = [...(currentProject.expenses || [])];
                     if (projExpEditingIdx !== null) {
                         updatedExpenses[projExpEditingIdx] = newExp;
                     } else {
                         updatedExpenses.push(newExp);
                     }
-                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('tasks').doc(currentTask.id).update({ expenses: updatedExpenses });
-                    setExpenseModalTask(null);
+                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('tasks').doc(currentProject.id).update({ expenses: updatedExpenses });
+                    setExpenseModalProject(null);
                     setProjExpEditingIdx(null);
-                } catch(err) {}
+                } catch(err) {
+                    console.error('儲存專案費用失敗:', err);
+                    alert('儲存專案費用失敗，請檢查網路後再試一次。');
+                }
                 setIsProcessing(false);
             };
             
-            const addChecklistItem = async (taskId) => {
-                const text = newChecklistText[taskId]?.trim();
+            const deleteProjectExpense = async (project, expenseIndex) => {
+                try {
+                    const updatedExpenses = [...(project.expenses || [])];
+                    updatedExpenses.splice(expenseIndex, 1);
+                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('tasks').doc(project.id).update({ expenses: updatedExpenses });
+                } catch (err) {
+                    console.error('刪除專案費用失敗:', err);
+                    alert('刪除專案費用失敗，請檢查網路後再試一次。');
+                }
+            };
+            
+            const addChecklistItem = async (projectId) => {
+                const text = newChecklistText[projectId]?.trim();
                 if(!text) return;
-                const task = tasks.find(t => t.id === taskId);
-                const list = task.checklist || [];
-                await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('tasks').doc(taskId).update({
-                    checklist: [...list, { id: Date.now().toString(), text, completed: false, links: [], images: [] }]
-                });
-                setNewChecklistText({...newChecklistText, [taskId]: ''});
+                try {
+                    const project = projects.find(p => p.id === projectId);
+                    const list = project.checklist || [];
+                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('tasks').doc(projectId).update({
+                        checklist: [...list, { id: Date.now().toString(), text, completed: false, links: [], images: [] }]
+                    });
+                    setNewChecklistText({...newChecklistText, [projectId]: ''});
+                } catch (err) {
+                    console.error('新增任務清單失敗:', err);
+                    alert('新增任務清單失敗，請檢查網路後再試一次。');
+                }
             };
             
-            const toggleChecklistItem = async (taskId, itemId) => {
-                const task = tasks.find(t => t.id === taskId);
-                const list = (task.checklist || []).map(item => item.id === itemId ? {...item, completed: !item.completed} : item);
-                await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('tasks').doc(taskId).update({ checklist: list });
+            const toggleChecklistItem = async (projectId, itemId) => {
+                try {
+                    const project = projects.find(p => p.id === projectId);
+                    const list = (project.checklist || []).map(item => item.id === itemId ? {...item, completed: !item.completed} : item);
+                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('tasks').doc(projectId).update({ checklist: list });
+                } catch (err) {
+                    console.error('更新任務狀態失敗:', err);
+                    alert('更新任務狀態失敗，請檢查網路後再試一次。');
+                }
             };
             
-            const deleteChecklistItem = async (taskId, itemId) => {
-                const task = tasks.find(t => t.id === taskId);
-                const list = (task.checklist || []).filter(item => item.id !== itemId);
-                await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('tasks').doc(taskId).update({ checklist: list });
+            const deleteChecklistItem = async (projectId, itemId) => {
+                try {
+                    const project = projects.find(p => p.id === projectId);
+                    const removedItem = (project.checklist || []).find(item => item.id === itemId);
+                    const list = (project.checklist || []).filter(item => item.id !== itemId);
+                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('tasks').doc(projectId).update({ checklist: list });
+                    await deleteStorageImages(removedItem?.images || []);
+                } catch (err) {
+                    console.error('刪除任務清單失敗:', err);
+                    alert('刪除任務清單失敗，請檢查網路後再試一次。');
+                }
             };
 
-            const editChecklistItem = (taskId, itemId, currentText) => {
+            const editChecklistItem = (projectId, itemId, currentText) => {
                 showInput('修改任務項目', currentText || '', '請輸入新的任務內容...', async (newText) => {
-                    const task = tasks.find(t => t.id === taskId);
-                    const list = (task.checklist || []).map(item => item.id === itemId ? {...item, text: newText} : item);
-                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('tasks').doc(taskId).update({ checklist: list });
+                    try {
+                        const project = projects.find(p => p.id === projectId);
+                        const list = (project.checklist || []).map(item => item.id === itemId ? {...item, text: newText} : item);
+                        await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('tasks').doc(projectId).update({ checklist: list });
+                    } catch (err) {
+                        console.error('修改任務清單失敗:', err);
+                        alert('修改任務清單失敗，請檢查網路後再試一次。');
+                    }
                 });
             };
 
             const updateChecklistItemData = async (taskId, itemId, updater) => {
-                const task = tasks.find(t => t.id === taskId);
-                if (!task) return;
-                const list = (task.checklist || []).map(item => item.id === itemId ? updater(item) : item);
+                const project = projects.find(p => p.id === taskId);
+                if (!project) return;
+                const list = (project.checklist || []).map(item => item.id === itemId ? updater(item) : item);
                 await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('tasks').doc(taskId).update({ checklist: list });
             };
 
             const openChecklistAttachmentModal = (taskId, itemId) => {
-                const task = tasks.find(t => t.id === taskId);
+                const task = projects.find(t => t.id === taskId);
                 const item = (task?.checklist || []).find(i => i.id === itemId);
                 if (!task || !item) return;
-                setChecklistAttachmentModal({ taskId, itemId, taskText: task.text || '', itemText: item.text || '' });
+                setChecklistAttachmentModal({ taskId, itemId, projectText: task.text || '', itemText: item.text || '' });
                 setChecklistAttachmentLinks((item.links || []).map(l => ({ label: l.label || '', url: l.url || '' })));
                 setChecklistAttachmentImages([...(item.images || [])]);
+                setChecklistAttachmentOriginalImages([...(item.images || [])]);
             };
 
-            const closeChecklistAttachmentModal = () => {
+            const closeChecklistAttachmentModal = async (cleanupNewImages = false) => {
+                if (cleanupNewImages) {
+                    const newlyUploadedImages = (checklistAttachmentImages || []).filter(url => !(checklistAttachmentOriginalImages || []).includes(url));
+                    await deleteStorageImages(newlyUploadedImages);
+                }
                 setChecklistAttachmentModal(null);
                 setChecklistAttachmentLinks([]);
                 setChecklistAttachmentImages([]);
+                setChecklistAttachmentOriginalImages([]);
                 setIsUploadingChecklistImage(false);
             };
 
@@ -928,6 +1008,7 @@
                         links: cleanLinks,
                         images: cleanImages
                     }));
+                    await deleteStorageImages(getRemovedImages(checklistAttachmentOriginalImages, cleanImages));
                     closeChecklistAttachmentModal();
                 } catch (error) {
                     console.error('儲存任務附件失敗:', error);
@@ -950,45 +1031,22 @@
             };
 
             const handleChecklistImageUpload = async (e) => {
-                const files = Array.from(e.target.files || []);
-                if (files.length === 0) return;
-                setIsUploadingChecklistImage(true);
-                try {
-                    const urls = await Promise.all(files.map(processAndUploadFile));
-                    setChecklistAttachmentImages(prev => [...prev, ...urls]);
-                } catch (error) {
-                    console.error('任務圖片上傳失敗:', error);
-                    alert('任務圖片上傳失敗，請檢查權限或網路連線');
-                } finally {
-                    setIsUploadingChecklistImage(false);
-                    e.target.value = '';
-                }
+                await uploadImageFiles({ files: e.target.files, setTargetImages: setChecklistAttachmentImages, setUploading: setIsUploadingChecklistImage, errorMessage: '任務圖片上傳失敗' });
+                e.target.value = '';
             };
 
             const handleChecklistImagePaste = async (e) => {
-                const items = e.clipboardData?.items || [];
-                const files = [];
-                for (let i = 0; i < items.length; i++) {
-                    if (items[i].type.indexOf('image') !== -1) files.push(items[i].getAsFile());
-                }
+                const files = getImageFilesFromPaste(e);
                 if (files.length === 0) return;
-                setIsUploadingChecklistImage(true);
-                try {
-                    const urls = await Promise.all(files.map(processAndUploadFile));
-                    setChecklistAttachmentImages(prev => [...prev, ...urls]);
-                } catch (error) {
-                    console.error('任務圖片貼上失敗:', error);
-                    alert('任務圖片上傳失敗');
-                } finally {
-                    setIsUploadingChecklistImage(false);
-                }
+                e.preventDefault();
+                await uploadImageFiles({ files, setTargetImages: setChecklistAttachmentImages, setUploading: setIsUploadingChecklistImage, errorMessage: '任務圖片貼上失敗' });
             };
 
             const deleteChecklistAttachmentImage = (idx) => {
                 setChecklistAttachmentImages(prev => prev.filter((_, i) => i !== idx));
             };
 
-            const calculateTaskTotal = (t) => (t.expenses || []).reduce((s, i) => s + (parseFloat(i.amount) || 0), 0);
+            const calculateProjectTotal = (t) => (t.expenses || []).reduce((s, i) => s + (parseFloat(i.amount) || 0), 0);
 
             const collapseProject = (taskId) => {
                 setExpandedProject(prev => {
@@ -1029,9 +1087,26 @@
                 setSelectedCalDate(null);
             };
 
-            const toggleProjectCompleted = async (t) => {
-                collapseProject(t.id);
-                await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('tasks').doc(t.id).update({ completed: !t.completed });
+            const toggleProjectCompleted = async (project) => {
+                try {
+                    collapseProject(project.id);
+                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('tasks').doc(project.id).update({ completed: !project.completed });
+                } catch (err) {
+                    console.error('更新專案狀態失敗:', err);
+                    alert('更新專案狀態失敗，請檢查網路後再試一次。');
+                }
+            };
+
+            const deleteProject = async (project) => {
+                try {
+                    const projectImages = project.images || [];
+                    const checklistImages = (project.checklist || []).flatMap(item => item.images || []);
+                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('tasks').doc(project.id).delete();
+                    await deleteStorageImages([...projectImages, ...checklistImages]);
+                } catch (err) {
+                    console.error('刪除專案失敗:', err);
+                    alert('刪除專案失敗，請檢查網路後再試一次。');
+                }
             };
 
             // --- CSV 匯出匯入相關 ---
@@ -1074,8 +1149,6 @@
                 return rows;
             };
 
-            // 保留舊函式名稱，避免其他地方仍有呼叫時中斷
-            const parseCSVLine = (line) => parseCSVContent(line)[0] || [];
 
             const normalizeHeader = (value) => String(value || '')
                 .replace(/^\uFEFF/, '')
@@ -1209,7 +1282,7 @@
 
             const handleExportProjectCSV = () => {
                 const rows = [];
-                tasks.forEach(t => {
+                projects.forEach(t => {
                     const base = [
                         t.text || '',
                         t.category || '',
@@ -1373,6 +1446,7 @@
                                     startDate: projectStartDate || '',
                                     endDate: projectEndDate || '',
                                     note: projectNote || '',
+                                    showInCalendar: true,
                                     images: [],
                                     links: [],
                                     expenses: [],
@@ -1461,7 +1535,7 @@
 
             const availableProjectYears = useMemo(() => {
                 const years = new Set();
-                tasks.forEach(t => {
+                projects.forEach(t => {
                     const range = getProjectDateRange(t);
                     if (!range) return;
                     const startYear = Number(range.start.substring(0, 4));
@@ -1470,12 +1544,12 @@
                     for (let y = startYear; y <= endYear; y++) years.add(y);
                 });
                 return Array.from(years).sort((a, b) => b - a);
-            }, [tasks]);
+            }, [projects]);
 
             const hasProjectFilters = projectKeyword.trim() || projectYearFilter !== 'all' || projectMonthFilter !== 'all' || selectedCalDate;
 
             const displayProjects = useMemo(() => {
-                let filtered = tasks.filter(t => projectSubTab === 'active' ? !t.completed : t.completed);
+                let filtered = projects.filter(t => projectSubTab === 'active' ? !t.completed : t.completed);
 
                 if (projectYearFilter !== 'all' || projectMonthFilter !== 'all') {
                     filtered = filtered.filter(t => projectMatchesYearMonth(t, projectYearFilter, projectMonthFilter));
@@ -1484,7 +1558,7 @@
                 if (selectedCalDate) {
                     filtered = filtered.filter(t => {
                         if (!t.startDate && !t.endDate) return false;
-                        return projectOverlapsDateRange(t, selectedCalDate, selectedCalDate);
+                        return t.showInCalendar !== false && projectOverlapsDateRange(t, selectedCalDate, selectedCalDate);
                     });
                 }
 
@@ -1519,7 +1593,7 @@
                     return projectSort === 'desc' ? dateB.localeCompare(dateA) : dateA.localeCompare(dateB);
                 });
                 return filtered;
-            }, [tasks, projectSubTab, projectSort, selectedCalDate, projectKeyword, projectYearFilter, projectMonthFilter]);
+            }, [projects, projectSubTab, projectSort, selectedCalDate, projectKeyword, projectYearFilter, projectMonthFilter]);
             
             const calDays = useMemo(() => {
                 const year = currentCalMonth.getFullYear();
@@ -1531,11 +1605,11 @@
                 for (let i = 0; i < firstDay; i++) days.push(null);
                 for (let i = 1; i <= daysInMonth; i++) {
                     const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
-                    const dayTasks = tasks.filter(t => projectOverlapsDateRange(t, dateStr, dateStr));
-                    days.push({ day: i, dateStr, tasks: dayTasks });
+                    const dayProjects = projects.filter(t => t.showInCalendar !== false && projectOverlapsDateRange(t, dateStr, dateStr));
+                    days.push({ day: i, dateStr, projects: dayProjects });
                 }
                 return days;
-            }, [currentCalMonth, tasks]);
+            }, [currentCalMonth, projects]);
 
             const analyticsData = useMemo(() => {
                 const ownerMap = {}; let totalExpense = 0; const trendMap = {}; const catMap = {};
@@ -1554,7 +1628,7 @@
                     trendMap[monthKey] = (trendMap[monthKey] || 0) + amt;
                 });
                 
-                tasks.forEach(t => {
+                projects.forEach(t => {
                     const currentOwners = t.owners && t.owners.length > 0 ? t.owners : (t.owner ? [t.owner] : []);
                     
                     if (analyticsOwnerFilter !== 'all' && !currentOwners.includes(analyticsOwnerFilter)) return;
@@ -1582,43 +1656,59 @@
                 });
                 
                 return { sortedOwners: Object.entries(ownerMap).sort((a,b)=>b[1]-a[1]), totalExpense, trendKeys: Object.keys(trendMap).sort(), trendMap, catMap };
-            }, [analyticsDailyExpenses, tasks, analyticsStart, analyticsEnd, analyticsCatFilter, analyticsOwnerFilter]);
+            }, [analyticsDailyExpenses, projects, analyticsStart, analyticsEnd, analyticsCatFilter, analyticsOwnerFilter]);
 
             useEffect(() => {
                 if (activeTab !== 'analytics') return;
-                const timer = setTimeout(() => {
-                    if (chartRefs.current.trend) chartRefs.current.trend.destroy();
-                    if (chartRefs.current.cat) chartRefs.current.cat.destroy();
 
-                    const trendCtx = document.getElementById('trendChart')?.getContext('2d');
-                    if (trendCtx) {
-                        chartRefs.current.trend = new Chart(trendCtx, {
-                            type: 'bar',
-                            data: { labels: analyticsData.trendKeys, datasets: [{ data: analyticsData.trendKeys.map(k => analyticsData.trendMap[k]), backgroundColor: '#A8D8EA', borderRadius: 8, borderWidth: 0 }] },
-                            options: { plugins: { legend: { display: false } }, scales: { x: { grid: { display: false } }, y: { grid: { borderDash: [4,4] } } } }
-                        });
-                    }
+                if (chartRefs.current.trend) { chartRefs.current.trend.destroy(); chartRefs.current.trend = null; }
+                if (chartRefs.current.cat) { chartRefs.current.cat.destroy(); chartRefs.current.cat = null; }
 
-                    const catCtx = document.getElementById('catChart')?.getContext('2d');
-                    if (catCtx && Object.keys(analyticsData.catMap).length > 0) {
-                        const bgColors = ['#A8D8EA', '#B4F8C8', '#FBE7C6', '#FFAAA5', '#E2E8F0', '#FFD3B6', '#D4A5A5', '#A2E1DB', '#EAD8F7'];
-                        chartRefs.current.cat = new Chart(catCtx, {
-                            type: 'doughnut',
-                            data: { 
-                                labels: Object.keys(analyticsData.catMap), 
-                                datasets: [{ 
-                                    data: Object.values(analyticsData.catMap), 
-                                    backgroundColor: bgColors, 
-                                    borderWidth: 0 
-                                }] 
-                            },
-                            options: { plugins: { legend: { position: 'right' } }, maintainAspectRatio: false }
-                        });
-                    }
-                }, 100);
-                return () => clearTimeout(timer);
+                const trendCtx = trendCanvasRef.current?.getContext('2d');
+                if (trendCtx) {
+                    chartRefs.current.trend = new Chart(trendCtx, {
+                        type: 'bar',
+                        data: { labels: analyticsData.trendKeys, datasets: [{ data: analyticsData.trendKeys.map(k => analyticsData.trendMap[k]), backgroundColor: '#A8D8EA', borderRadius: 8, borderWidth: 0 }] },
+                        options: { plugins: { legend: { display: false } }, scales: { x: { grid: { display: false } }, y: { grid: { borderDash: [4,4] } } } }
+                    });
+                }
+
+                const catCtx = catCanvasRef.current?.getContext('2d');
+                if (catCtx && Object.keys(analyticsData.catMap).length > 0) {
+                    const bgColors = ['#A8D8EA', '#B4F8C8', '#FBE7C6', '#FFAAA5', '#E2E8F0', '#FFD3B6', '#D4A5A5', '#A2E1DB', '#EAD8F7'];
+                    chartRefs.current.cat = new Chart(catCtx, {
+                        type: 'doughnut',
+                        data: { labels: Object.keys(analyticsData.catMap), datasets: [{ data: Object.values(analyticsData.catMap), backgroundColor: bgColors, borderWidth: 0 }] },
+                        options: { plugins: { legend: { position: 'right' } }, maintainAspectRatio: false }
+                    });
+                }
+
+                return () => {
+                    if (chartRefs.current.trend) { chartRefs.current.trend.destroy(); chartRefs.current.trend = null; }
+                    if (chartRefs.current.cat) { chartRefs.current.cat.destroy(); chartRefs.current.cat = null; }
+                };
             }, [activeTab, analyticsData]);
 
+
+            const renderAttachmentLinks = (links = []) => links.length > 0 ? (
+                <div className="flex flex-wrap gap-2 mt-2">
+                    {links.map((link, idx) => (
+                        <a key={idx} href={link.url} target="_blank" rel="noreferrer" className="bubble-btn btn-outline !px-3 !py-1.5 !text-[13px] border-none shadow-sm bg-white">
+                            <Icon name="link" size={14}/> {link.label || '連結'}
+                        </a>
+                    ))}
+                </div>
+            ) : null;
+
+            const renderAttachmentImages = (imageUrls = [], imageClass = 'w-20 h-20') => imageUrls.length > 0 ? (
+                <div className="flex flex-wrap gap-3 mt-3">
+                    {imageUrls.map((img, idx) => (
+                        <a key={idx} href={img} target="_blank" rel="noreferrer">
+                            <img src={img} className={`${imageClass} object-cover rounded-[12px] shadow-sm border border-gray-100 hover:opacity-80 transition-opacity bg-white`} alt="附件" />
+                        </a>
+                    ))}
+                </div>
+            ) : null;
 
             const renderDailyView = () => (
                 <div className="animate-in fade-in duration-300 max-w-xl mx-auto space-y-6">
@@ -1730,7 +1820,7 @@
                                         <>
                                             <span className="text-[12px] font-bold">{d.day}</span>
                                             <div className="flex flex-wrap gap-0.5 justify-center mt-1">
-                                                {d.tasks.map((t, idx) => <span key={idx} className={`w-1.5 h-1.5 rounded-full ${t.completed ? 'bg-[var(--text-blue)]' : 'bg-[#22C55E]'}`}></span>)}
+                                                {d.projects.map((t, idx) => <span key={idx} className={`w-1.5 h-1.5 rounded-full ${t.completed ? 'bg-[var(--text-blue)]' : 'bg-[#22C55E]'}`}></span>)}
                                             </div>
                                         </>
                                     )}
@@ -1806,7 +1896,7 @@
                         {displayProjects.length === 0 && <p className="text-center font-bold text-[var(--bubble-text)]/40 py-10">{hasProjectFilters ? '找不到符合篩選的專案' : '尚無專案'}</p>}
                         {displayProjects.map(t => {
                             const isExpanded = expandedProject[t.id];
-                            const total = calculateTaskTotal(t);
+                            const total = calculateProjectTotal(t);
                             const currentOwners = t.owners && t.owners.length > 0 ? t.owners : [];
                             const checklists = t.checklist || [];
                             
@@ -1824,6 +1914,7 @@
                                                 {currentOwners.map(o => <span key={o} className="tag bg-[#F8FAFC] text-[var(--bubble-text)] border border-gray-100">{o}</span>)}
                                             </div>
                                             {(t.startDate || t.endDate) && <div className="font-bold text-[13px] text-[var(--bubble-text)]/50 mt-3 flex items-center gap-1.5"><Icon name="calendar" size={14}/> {t.startDate} {t.endDate && `→ ${t.endDate}`}</div>}
+                                            {t.showInCalendar === false && <div className="font-bold text-[12px] text-slate-400 mt-2 flex items-center gap-1.5"><Icon name="calendar-x" size={13}/> 不顯示於行事曆</div>}
                                         </div>
                                     </div>
                                     
@@ -1833,7 +1924,7 @@
                                                 {!t.completed && <button onClick={()=>openExpenseModal(t)} className="bubble-btn btn-primary !px-4 !py-2 !text-sm"><Icon name="dollar-sign" size={16}/> 記一筆</button>}
                                                 <button onClick={()=>openProjectEdit(t)} className="bubble-btn btn-outline !px-4 !py-2 !text-sm !border-none shadow-sm"><Icon name="edit" size={16}/> 編輯</button>
                                                 <button onClick={()=>toggleProjectCompleted(t)} className="bubble-btn btn-outline !px-4 !py-2 !text-sm !border-none shadow-sm">{t.completed ? "重新開啟" : "標示為已結束"}</button>
-                                                <button onClick={()=>showConfirm('刪除專案', '確定刪除此專案與所有明細嗎？', async () => await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('tasks').doc(t.id).delete())} className="bubble-btn btn-danger !px-4 !py-2 !text-sm ml-auto"><Icon name="trash" size={16}/></button>
+                                                <button onClick={()=>showConfirm('刪除專案', '確定刪除此專案與所有明細嗎？', async () => await deleteProject(t))} className="bubble-btn btn-danger !px-4 !py-2 !text-sm ml-auto"><Icon name="trash" size={16}/></button>
                                             </div>
                                             
                                             {/* Checklist 區塊 */}
@@ -1863,25 +1954,9 @@
                                                                     </div>
                                                                 </div>
                                                                 {(itemLinks.length > 0 || itemImages.length > 0) && (
-                                                                    <div className="mt-3 pl-[39px] space-y-2 max-w-full overflow-hidden">
-                                                                        {itemLinks.length > 0 && (
-                                                                            <div className="flex flex-wrap gap-2 max-w-full">
-                                                                                {itemLinks.map((l, idx) => (
-                                                                                    <a key={idx} href={l.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 max-w-full px-3 py-1.5 rounded-full bg-white text-[var(--text-blue)] text-[12px] font-black border border-[var(--pastel-blue)]/40 shadow-sm">
-                                                                                        <Icon name="link" size={13}/> <span className="truncate max-w-[140px]">{l.label || '連結'}</span>
-                                                                                    </a>
-                                                                                ))}
-                                                                            </div>
-                                                                        )}
-                                                                        {itemImages.length > 0 && (
-                                                                            <div className="flex flex-wrap gap-2 max-w-full">
-                                                                                {itemImages.map((img, idx) => (
-                                                                                    <a key={idx} href={img} target="_blank" rel="noreferrer" className="flex-shrink-0">
-                                                                                        <img src={img} className="w-16 h-16 object-cover rounded-[14px] shadow-sm border border-gray-200 bg-white" alt="任務附件" />
-                                                                                    </a>
-                                                                                ))}
-                                                                            </div>
-                                                                        )}
+                                                                    <div className="mt-3 pl-[39px] max-w-full overflow-hidden">
+                                                                        {renderAttachmentLinks(itemLinks)}
+                                                                        {renderAttachmentImages(itemImages, 'w-16 h-16')}
                                                                     </div>
                                                                 )}
                                                             </div>
@@ -1896,22 +1971,14 @@
                                             </div>
 
                                             {t.note && <div className="font-bold text-[15px] text-[var(--bubble-text)]/80 whitespace-pre-line bg-[#F8FAFC] p-5 rounded-[20px] mb-4 leading-relaxed">{t.note}</div>}
-                                            
                                             {t.links && t.links.length > 0 && (
-                                                <div className="mb-4 flex flex-wrap gap-2">
-                                                    {t.links.map((l, i) => (
-                                                        <a key={i} href={l.url} target="_blank" className="bubble-btn btn-outline !px-3 !py-1.5 !text-[13px] hover:bg-[var(--pastel-blue)] hover:text-[var(--text-blue)] border-none shadow-sm"><Icon name="link" size={14}/> {l.label || "連結"}</a>
-                                                    ))}
+                                                <div className="mb-4">
+                                                    {renderAttachmentLinks(t.links)}
                                                 </div>
                                             )}
-
                                             {t.images && t.images.length > 0 && (
-                                                <div className="mb-4 flex flex-wrap gap-3">
-                                                    {t.images.map((img, idx) => (
-                                                        <a key={idx} href={img} target="_blank" rel="noreferrer">
-                                                            <img src={img} className="w-24 h-24 object-cover rounded-[16px] shadow-sm border border-gray-100 hover:opacity-80 transition-opacity" alt="附件" />
-                                                        </a>
-                                                    ))}
+                                                <div className="mb-4">
+                                                    {renderAttachmentImages(t.images, 'w-24 h-24')}
                                                 </div>
                                             )}
 
@@ -1928,10 +1995,7 @@
                                                                 <div className="flex flex-col sm:flex-row items-end sm:items-center gap-2 ml-auto pl-2">
                                                                     <div className="flex gap-1 sm:opacity-0 group-hover:opacity-100 transition-opacity order-2 sm:order-1">
                                                                         <button onClick={()=>openExpenseModal(t, idx)} className="bg-[var(--pastel-blue)]/30 text-[var(--text-blue)] p-1.5 rounded-xl transition-all hover:bg-[var(--pastel-blue)]"><Icon name="edit-2" size={16} /></button>
-                                                                        <button onClick={()=>showConfirm('刪除明細', '確定要刪除這筆專案費用嗎？', async () => {
-                                                                            const updated = [...t.expenses]; updated.splice(idx, 1);
-                                                                            await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('tasks').doc(t.id).update({expenses: updated});
-                                                                        })} className="bg-[var(--pastel-orange)]/30 text-[var(--text-orange)] p-1.5 rounded-xl transition-all hover:bg-[var(--pastel-orange)]"><Icon name="trash-2" size={16}/></button>
+                                                                        <button onClick={()=>showConfirm('刪除明細', '確定要刪除這筆專案費用嗎？', async () => await deleteProjectExpense(t, idx))} className="bg-[var(--pastel-orange)]/30 text-[var(--text-orange)] p-1.5 rounded-xl transition-all hover:bg-[var(--pastel-orange)]"><Icon name="trash-2" size={16}/></button>
                                                                     </div>
                                                                     <span className="font-black text-lg text-[var(--bubble-text)] text-right order-1 sm:order-2">${parseFloat(e.amount).toLocaleString()}</span>
                                                                 </div>
@@ -1992,7 +2056,7 @@
                     <div className="bubble-card p-6 bg-white">
                         <h3 className="text-xl font-black mb-5 flex items-center gap-2"><Icon name="pie-chart" size={20}/> 項目佔比</h3>
                         {Object.keys(analyticsData.catMap).length > 0 ? (
-                            <div className="h-56"><canvas id="catChart"></canvas></div>
+                            <div className="h-56"><canvas ref={catCanvasRef}></canvas></div>
                         ) : (
                             <div className="text-center font-bold text-gray-400 py-10">此區間無費用資料</div>
                         )}
@@ -2000,7 +2064,7 @@
 
                     <div className="bubble-card p-6 bg-white">
                         <h3 className="text-xl font-black mb-5 flex items-center gap-2"><Icon name="bar-chart-2" size={20}/> 月度趨勢</h3>
-                        <div className="h-48"><canvas id="trendChart"></canvas></div>
+                        <div className="h-48"><canvas ref={trendCanvasRef}></canvas></div>
                     </div>
 
                     <div className="bubble-card p-6 bg-white">
@@ -2175,16 +2239,16 @@
 
                     {/* 專案新增/編輯 Modal */}
                     {isProjectFormOpen && (
-                        <div className="modal-overlay" onClick={() => setIsProjectFormOpen(false)}>
+                        <div className="modal-overlay" onClick={closeProjectForm}>
                             <div className="bubble-card bg-white w-full max-w-lg modal-panel-wide flex flex-col h-[85vh] animate-in zoom-in-95 duration-200 overflow-hidden mx-4" onClick={e=>e.stopPropagation()}>
                                 <div className="p-5 border-b-2 border-gray-50 flex justify-between items-center bg-white z-10">
                                     <h3 className="font-black text-2xl text-[var(--bubble-text)]">{projectEditingId ? "編輯專案" : "建立新專案"}</h3>
-                                    <button onClick={() => setIsProjectFormOpen(false)} className="p-2 bg-gray-50 rounded-full text-gray-500 hover:bg-gray-100"><Icon name="x" size={20}/></button>
+                                    <button onClick={closeProjectForm} className="p-2 bg-gray-50 rounded-full text-gray-500 hover:bg-gray-100"><Icon name="x" size={20}/></button>
                                 </div>
                                 <div className="p-4 sm:p-6 overflow-y-auto space-y-6 flex-grow bg-[#F8FAFC]/50">
                                     <div>
                                         <label className="font-black mb-2 block text-sm text-[var(--bubble-text)]/60">專案名稱</label>
-                                        <input className="w-full min-w-0 !max-w-full text-xl !bg-white" placeholder="輸入名稱..." value={taskText} onChange={e=>setTaskText(e.target.value)} />
+                                        <input className="w-full min-w-0 !max-w-full text-xl !bg-white" placeholder="輸入名稱..." value={projectText} onChange={e=>setProjectText(e.target.value)} />
                                     </div>
                                     
                                     <div className="bg-white p-5 rounded-[24px] shadow-sm border border-gray-100 space-y-4">
@@ -2215,6 +2279,13 @@
                                                 <input type="date" value={endDate} onChange={e=>setEndDate(e.target.value)} className="flex-1 min-w-0 !max-w-full !bg-white !px-1.5 !py-2 !text-xs tracking-tighter sm:text-sm text-center" />
                                             </div>
                                             {isProjectDateInvalid && <div className="text-[var(--text-orange)] text-sm font-bold mt-2">結束日期不能早於起始日期！</div>}
+                                        </div>
+                                        <div className="pt-2">
+                                            <label className="font-black mb-2 block text-sm text-[var(--bubble-text)]/60">行事曆顯示</label>
+                                            <button type="button" onClick={() => setShowInCalendar(prev => !prev)} className={`bubble-btn w-full !justify-start !rounded-[18px] ${showInCalendar ? 'btn-mint' : 'btn-outline'}`}>
+                                                <Icon name={showInCalendar ? 'calendar-check' : 'calendar-x'} size={18}/>
+                                                {showInCalendar ? '顯示在行事曆' : '不顯示在行事曆'}
+                                            </button>
                                         </div>
                                     </div>
 
@@ -2277,12 +2348,12 @@
                     )}
 
                     {/* 專案記單筆花費 Modal (降一列垂直排列解決手機板破圖) */}
-                    {expenseModalTask && (
-                        <div className="modal-overlay" onClick={() => setExpenseModalTask(null)}>
+                    {expenseModalProject && (
+                        <div className="modal-overlay" onClick={() => setExpenseModalProject(null)}>
                             <div className="bubble-card bg-white w-full max-w-sm modal-panel overflow-hidden animate-in zoom-in-95 duration-200 mx-4" onClick={e=>e.stopPropagation()}>
                                 <div className="p-4 border-b-2 border-gray-50 flex justify-between items-center bg-[var(--pastel-mint)]/30">
                                     <h3 className="font-black text-lg text-[var(--text-mint)]">{projExpEditingIdx !== null ? '編輯專案費用' : '記一筆專案費用'}</h3>
-                                    <button onClick={() => setExpenseModalTask(null)} className="p-1.5 bg-white rounded-full text-gray-500 hover:bg-gray-100"><Icon name="x" size={18}/></button>
+                                    <button onClick={() => setExpenseModalProject(null)} className="p-1.5 bg-white rounded-full text-gray-500 hover:bg-gray-100"><Icon name="x" size={18}/></button>
                                 </div>
                                 <form onSubmit={submitProjectExpense} className="p-5 sm:p-6 space-y-4">
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mobile-stack">
@@ -2303,15 +2374,15 @@
 
                     {/* 任務清單附件管理 Modal */}
                     {checklistAttachmentModal && (
-                        <div className="modal-overlay" onClick={closeChecklistAttachmentModal}>
+                        <div className="modal-overlay" onClick={() => closeChecklistAttachmentModal(true)}>
                             <div className="bubble-card bg-white w-full max-w-lg modal-panel-wide flex flex-col h-[82vh] animate-in zoom-in-95 duration-200 overflow-hidden mx-4" onClick={e=>e.stopPropagation()}>
                                 <div className="p-4 border-b-2 border-gray-50 flex justify-between items-start gap-3 bg-[var(--pastel-mint)]/30">
                                     <div className="min-w-0">
                                         <h3 className="font-black text-lg text-[var(--text-mint)] flex items-center gap-2"><Icon name="paperclip" size={18}/> 任務附件</h3>
-                                        <div className="font-bold text-[12px] text-[var(--bubble-text)]/50 mt-1 truncate">{checklistAttachmentModal.taskText}</div>
+                                        <div className="font-bold text-[12px] text-[var(--bubble-text)]/50 mt-1 truncate">{checklistAttachmentModal.projectText}</div>
                                         <div className="font-black text-sm text-[var(--bubble-text)] mt-1 break-words">{checklistAttachmentModal.itemText}</div>
                                     </div>
-                                    <button onClick={closeChecklistAttachmentModal} className="p-1.5 bg-white rounded-full text-gray-500 hover:bg-gray-100 flex-shrink-0"><Icon name="x" size={18}/></button>
+                                    <button onClick={() => closeChecklistAttachmentModal(true)} className="p-1.5 bg-white rounded-full text-gray-500 hover:bg-gray-100 flex-shrink-0"><Icon name="x" size={18}/></button>
                                 </div>
                                 <div className="flex-grow overflow-y-auto no-scrollbar p-5 space-y-5 bg-[var(--bubble-bg)]/35">
                                     <div className="bg-white p-5 rounded-[24px] shadow-sm border border-gray-100">
@@ -2360,7 +2431,7 @@
                                     </div>
                                 </div>
                                 <div className="p-5 border-t-2 border-gray-50 bg-white flex gap-3">
-                                    <button onClick={closeChecklistAttachmentModal} className="bubble-btn btn-outline flex-1 py-3">取消</button>
+                                    <button onClick={() => closeChecklistAttachmentModal(true)} className="bubble-btn btn-outline flex-1 py-3">取消</button>
                                     <button onClick={saveChecklistAttachments} disabled={isProcessing || isUploadingChecklistImage} className="bubble-btn btn-mint flex-1 py-3">{isProcessing || isUploadingChecklistImage ? '處理中...' : '儲存附件'}</button>
                                 </div>
                             </div>
