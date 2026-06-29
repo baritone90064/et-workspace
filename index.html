@@ -387,12 +387,20 @@
         };
 
         const LAST_DAILY_OWNER_KEY = 'etWorkspaceLastDailyOwner';
+        const DAILY_COMBO_OWNER = 'Terry； Eric';
+        const normalizeDailyOwnerOption = (owner) => {
+            const text = String(owner || '').trim();
+            return text === 'Terry;Eric' ? DAILY_COMBO_OWNER : text;
+        };
         const getSavedDailyOwner = () => {
-            try { return localStorage.getItem(LAST_DAILY_OWNER_KEY) || ''; }
+            try { return normalizeDailyOwnerOption(localStorage.getItem(LAST_DAILY_OWNER_KEY) || ''); }
             catch (e) { return ''; }
         };
         const saveDailyOwner = (owner) => {
-            try { if (owner) localStorage.setItem(LAST_DAILY_OWNER_KEY, owner); }
+            try {
+                const normalized = normalizeDailyOwnerOption(owner);
+                if (normalized) localStorage.setItem(LAST_DAILY_OWNER_KEY, normalized);
+            }
             catch (e) {}
         };
 
@@ -520,10 +528,10 @@
             const [checklistAttachmentImages, setChecklistAttachmentImages] = useState([]);
             const [isUploadingChecklistImage, setIsUploadingChecklistImage] = useState(false);
 
-            // 日常記帳成員選項：保留原本單一成員，同時提供 Terry;Eric 共同記帳選項
+            // 日常記帳成員選項：保留原本單一成員，同時提供 Terry； Eric 共同記帳選項
             const dailyOwnerOptions = useMemo(() => {
-                const names = members.map(m => m.name).filter(Boolean);
-                const comboOwner = 'Terry;Eric';
+                const names = members.map(m => m.name).filter(Boolean).map(normalizeDailyOwnerOption);
+                const comboOwner = DAILY_COMBO_OWNER;
                 const hasTerry = names.includes('Terry');
                 const hasEric = names.includes('Eric');
                 return hasTerry && hasEric && !names.includes(comboOwner) ? [...names, comboOwner] : names;
@@ -644,11 +652,12 @@
             useEffect(() => {
                 if (dailyOwnerOptions.length === 0) return;
                 const savedOwner = getSavedDailyOwner();
+                const normalizedCurrentOwner = normalizeDailyOwnerOption(dailyOwner);
                 const nextOwner = savedOwner && dailyOwnerOptions.includes(savedOwner)
                     ? savedOwner
-                    : (dailyOwner && dailyOwnerOptions.includes(dailyOwner) ? dailyOwner : dailyOwnerOptions[0]);
+                    : (normalizedCurrentOwner && dailyOwnerOptions.includes(normalizedCurrentOwner) ? normalizedCurrentOwner : dailyOwnerOptions[0]);
 
-                if (!dailyOwner || !dailyOwnerOptions.includes(dailyOwner)) {
+                if (!dailyOwner || !dailyOwnerOptions.includes(normalizedCurrentOwner) || dailyOwner !== normalizedCurrentOwner) {
                     setDailyOwner(nextOwner);
                     saveDailyOwner(nextOwner);
                 }
@@ -1841,40 +1850,40 @@
                                                                     <div onClick={()=>toggleChecklistItem(t.id, item.id)} className={`cute-checkbox flex-shrink-0 mt-0.5 ${item.completed ? 'checked' : ''}`}>
                                                                         {item.completed && <Icon name="check" size={16} className="text-[var(--text-mint)]" />}
                                                                     </div>
-                                                                    <div className="flex-grow min-w-0">
-                                                                        <div className="cursor-pointer pt-0.5" onClick={()=>toggleChecklistItem(t.id, item.id)}>
-                                                                            <span className={`font-bold text-[15px] break-words ${item.completed ? 'line-through' : ''}`}>{item.text}</span>
-                                                                        </div>
-                                                                        {(itemLinks.length > 0 || itemImages.length > 0) && (
-                                                                            <div className="mt-3 space-y-2">
-                                                                                {itemLinks.length > 0 && (
-                                                                                    <div className="flex flex-wrap gap-2">
-                                                                                        {itemLinks.map((l, idx) => (
-                                                                                            <a key={idx} href={l.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white text-[var(--text-blue)] text-[12px] font-black border border-[var(--pastel-blue)]/40 shadow-sm">
-                                                                                                <Icon name="link" size={13}/> {l.label || '連結'}
-                                                                                            </a>
-                                                                                        ))}
-                                                                                    </div>
-                                                                                )}
-                                                                                {itemImages.length > 0 && (
-                                                                                    <div className="flex flex-wrap gap-2">
-                                                                                        {itemImages.map((img, idx) => (
-                                                                                            <a key={idx} href={img} target="_blank" rel="noreferrer">
-                                                                                                <img src={img} className="w-16 h-16 object-cover rounded-[14px] shadow-sm border border-gray-200 bg-white" alt="任務附件" />
-                                                                                            </a>
-                                                                                        ))}
-                                                                                    </div>
-                                                                                )}
+                                                                    <div className="flex-grow min-w-0 cursor-pointer pt-0.5" onClick={()=>toggleChecklistItem(t.id, item.id)}>
+                                                                        <span className={`font-bold text-[15px] break-words ${item.completed ? 'line-through' : ''}`}>{item.text}</span>
+                                                                    </div>
+                                                                    <div className="flex items-center gap-1 flex-shrink-0">
+                                                                        <button onClick={()=>openChecklistAttachmentModal(t.id, item.id)} className="relative text-[var(--text-mint)] bg-white hover:bg-[var(--pastel-mint)]/30 p-1.5 rounded-lg transition-all shadow-sm border border-gray-100" title="管理連結與圖片">
+                                                                            <Icon name="paperclip" size={16}/>
+                                                                            {attachmentCount > 0 && <span className="absolute -top-2 -right-2 min-w-[18px] h-[18px] px-1 rounded-full bg-[var(--pastel-yellow)] text-[var(--text-yellow)] text-[10px] font-black flex items-center justify-center shadow-sm">{attachmentCount}</span>}
+                                                                        </button>
+                                                                        <button onClick={()=>editChecklistItem(t.id, item.id, item.text)} className="text-[var(--text-blue)] bg-white hover:bg-[var(--pastel-blue)]/20 p-1.5 rounded-lg transition-all shadow-sm border border-gray-100" title="修改項目"><Icon name="edit-2" size={16}/></button>
+                                                                        <button onClick={()=>deleteChecklistItem(t.id, item.id)} className="text-[var(--pastel-orange)] bg-white hover:bg-[var(--pastel-orange)]/10 p-1.5 rounded-lg transition-all shadow-sm border border-gray-100" title="刪除項目"><Icon name="trash-2" size={16}/></button>
+                                                                    </div>
+                                                                </div>
+                                                                {(itemLinks.length > 0 || itemImages.length > 0) && (
+                                                                    <div className="mt-3 pl-[39px] space-y-2 max-w-full overflow-hidden">
+                                                                        {itemLinks.length > 0 && (
+                                                                            <div className="flex flex-wrap gap-2 max-w-full">
+                                                                                {itemLinks.map((l, idx) => (
+                                                                                    <a key={idx} href={l.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 max-w-full px-3 py-1.5 rounded-full bg-white text-[var(--text-blue)] text-[12px] font-black border border-[var(--pastel-blue)]/40 shadow-sm">
+                                                                                        <Icon name="link" size={13}/> <span className="truncate max-w-[140px]">{l.label || '連結'}</span>
+                                                                                    </a>
+                                                                                ))}
+                                                                            </div>
+                                                                        )}
+                                                                        {itemImages.length > 0 && (
+                                                                            <div className="flex flex-wrap gap-2 max-w-full">
+                                                                                {itemImages.map((img, idx) => (
+                                                                                    <a key={idx} href={img} target="_blank" rel="noreferrer" className="flex-shrink-0">
+                                                                                        <img src={img} className="w-16 h-16 object-cover rounded-[14px] shadow-sm border border-gray-200 bg-white" alt="任務附件" />
+                                                                                    </a>
+                                                                                ))}
                                                                             </div>
                                                                         )}
                                                                     </div>
-                                                                    <button onClick={()=>openChecklistAttachmentModal(t.id, item.id)} className="relative text-[var(--text-mint)] bg-white hover:bg-[var(--pastel-mint)]/30 p-1.5 rounded-lg transition-all shadow-sm border border-gray-100" title="管理連結與圖片">
-                                                                        <Icon name="paperclip" size={16}/>
-                                                                        {attachmentCount > 0 && <span className="absolute -top-2 -right-2 min-w-[18px] h-[18px] px-1 rounded-full bg-[var(--pastel-yellow)] text-[var(--text-yellow)] text-[10px] font-black flex items-center justify-center shadow-sm">{attachmentCount}</span>}
-                                                                    </button>
-                                                                    <button onClick={()=>editChecklistItem(t.id, item.id, item.text)} className="text-[var(--text-blue)] bg-white hover:bg-[var(--pastel-blue)]/20 p-1.5 rounded-lg transition-all shadow-sm border border-gray-100" title="修改項目"><Icon name="edit-2" size={16}/></button>
-                                                                    <button onClick={()=>deleteChecklistItem(t.id, item.id)} className="text-[var(--pastel-orange)] bg-white hover:bg-[var(--pastel-orange)]/10 p-1.5 rounded-lg transition-all shadow-sm border border-gray-100" title="刪除項目"><Icon name="trash-2" size={16}/></button>
-                                                                </div>
+                                                                )}
                                                             </div>
                                                         );
                                                     })}
