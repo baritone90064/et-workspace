@@ -1533,6 +1533,26 @@
                 return displayDaily.reduce((sum, d) => sum + (parseFloat(d.amount) || 0), 0);
             }, [displayDaily]);
 
+            const homeScheduleReminders = useMemo(() => {
+                const today = getLocalDateString();
+                const tomorrow = getNextDateString(today);
+
+                const findProjectsForDate = (targetDate) => projects
+                    .filter(p => p.showInCalendar !== false && projectOverlapsDateRange(p, targetDate, targetDate))
+                    .sort((a, b) => {
+                        const dateA = a.startDate || a.createdAt || '';
+                        const dateB = b.startDate || b.createdAt || '';
+                        return dateA.localeCompare(dateB);
+                    });
+
+                return {
+                    today,
+                    tomorrow,
+                    todayProjects: findProjectsForDate(today),
+                    tomorrowProjects: findProjectsForDate(tomorrow)
+                };
+            }, [projects]);
+
             const availableProjectYears = useMemo(() => {
                 const years = new Set();
                 projects.forEach(t => {
@@ -1710,17 +1730,71 @@
                 </div>
             ) : null;
 
+            const renderReminderList = (title, dateText, reminderProjects, iconName, colorClass) => reminderProjects.length > 0 ? (
+                <div className="bg-white rounded-[22px] p-4 shadow-sm border border-gray-50">
+                    <div className="flex items-center justify-between gap-2 mb-3">
+                        <div className="flex items-center gap-2">
+                            <span className={`w-9 h-9 rounded-[14px] flex items-center justify-center ${colorClass}`}>
+                                <Icon name={iconName} size={18} />
+                            </span>
+                            <div>
+                                <div className="font-black text-[15px] text-slate-700">{title}</div>
+                                <div className="font-bold text-[12px] text-slate-400">{dateText}</div>
+                            </div>
+                        </div>
+                        <span className="tag bg-[var(--pastel-gray)] text-gray-600">{reminderProjects.length} 項</span>
+                    </div>
+                    <div className="space-y-2">
+                        {reminderProjects.slice(0, 5).map(p => (
+                            <div key={p.id} className="flex items-start gap-2 bg-[#F8FAFC] rounded-[16px] p-3">
+                                <Icon name={p.completed ? 'check-circle-2' : 'calendar-days'} size={16} className={p.completed ? 'text-[var(--text-blue)] mt-0.5' : 'text-[var(--text-mint)] mt-0.5'} />
+                                <div className="min-w-0 flex-grow">
+                                    <div className="font-black text-[14px] text-slate-700 truncate">{p.text}</div>
+                                    <div className="font-bold text-[12px] text-slate-400 mt-0.5">
+                                        {p.startDate || '未設定日期'}{p.endDate && p.endDate !== p.startDate ? ` → ${p.endDate}` : ''}
+                                        <span className="ml-2">{p.completed ? '已結束' : '進行中'}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                        {reminderProjects.length > 5 && (
+                            <div className="text-center font-bold text-[12px] text-slate-400 pt-1">還有 {reminderProjects.length - 5} 項，請到專案頁查看</div>
+                        )}
+                    </div>
+                </div>
+            ) : null;
+
+            const renderHomeScheduleReminders = () => {
+                const hasReminders = homeScheduleReminders.todayProjects.length > 0 || homeScheduleReminders.tomorrowProjects.length > 0;
+                if (!hasReminders) return null;
+                return (
+                    <div className="bubble-card bg-white/80 p-4 space-y-3 border-2 border-[var(--pastel-yellow)]/40">
+                        <div className="flex items-center gap-2 px-1">
+                            <div className="bg-[var(--pastel-yellow)] p-2 rounded-2xl"><Icon name="bell" size={20} className="text-[var(--text-yellow)]" /></div>
+                            <div>
+                                <h3 className="font-black text-lg text-[var(--bubble-text)]">行程提醒</h3>
+                                <p className="font-bold text-[12px] text-slate-400">只顯示已開啟行事曆顯示的專案</p>
+                            </div>
+                        </div>
+                        {renderReminderList('今日行程', homeScheduleReminders.today, homeScheduleReminders.todayProjects, 'calendar-check', 'bg-[var(--pastel-mint)] text-[var(--text-mint)]')}
+                        {renderReminderList('明日行程', homeScheduleReminders.tomorrow, homeScheduleReminders.tomorrowProjects, 'calendar-clock', 'bg-[var(--pastel-blue)] text-[var(--text-blue)]')}
+                    </div>
+                );
+            };
+
             const renderDailyView = () => (
                 <div className="animate-in fade-in duration-300 max-w-xl mx-auto space-y-6">
                     <div className="flex items-center gap-3 px-2 mb-2">
                         <div className="bg-[var(--pastel-blue)] p-2 rounded-2xl"><Icon name="wallet" size={24} className="text-[var(--text-blue)]" /></div>
                         <h1 className="text-2xl font-black tracking-tight text-[var(--bubble-text)]">日常流水帳</h1>
                     </div>
+
+                    {renderHomeScheduleReminders()}
                     
                     <form onSubmit={submitDailyExpense} className="bubble-card p-6 space-y-4 bg-white border-2 border-[var(--pastel-blue)]/30">
                         <div className="grid grid-cols-2 gap-3">
                             <input type="date" value={dailyDate} onChange={e=>setDailyDate(e.target.value)} required className="w-full min-w-0 !max-w-full" />
-                            <input type="number" placeholder="金額 $" value={dailyAmount} onChange={e=>setDailyAmount(e.target.value)} required className="w-full min-w-0 !max-w-full text-xl text-[var(--text-blue)] font-black" />
+                            <input type="number" inputMode="decimal" pattern="[0-9]*" enterKeyHint="done" placeholder="金額 $" value={dailyAmount} onChange={e=>setDailyAmount(e.target.value)} required className="w-full min-w-0 !max-w-full text-xl text-[var(--text-blue)] font-black" />
                         </div>
                         <div className="grid grid-cols-2 gap-3">
                             <select value={dailyItem} onChange={e=>setDailyItem(e.target.value)} required className="w-full min-w-0 !max-w-full">
@@ -2219,7 +2293,7 @@
                                 <form onSubmit={submitDailyEdit} className="p-5 sm:p-6 space-y-4">
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mobile-stack">
                                         <input type="date" value={dailyEditData.date} onChange={e=>setDailyEditData({...dailyEditData, date: e.target.value})} required className="w-full min-w-0 !max-w-full" />
-                                        <input type="number" placeholder="金額 $" value={dailyEditData.amount} onChange={e=>setDailyEditData({...dailyEditData, amount: e.target.value})} required className="w-full min-w-0 !max-w-full font-black text-xl text-[var(--text-blue)]" />
+                                        <input type="number" inputMode="decimal" pattern="[0-9]*" enterKeyHint="done" placeholder="金額 $" value={dailyEditData.amount} onChange={e=>setDailyEditData({...dailyEditData, amount: e.target.value})} required className="w-full min-w-0 !max-w-full font-black text-xl text-[var(--text-blue)]" />
                                     </div>
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mobile-stack">
                                         <select value={dailyEditData.item} onChange={e=>setDailyEditData({...dailyEditData, item: e.target.value})} required className="w-full min-w-0 !max-w-full">
@@ -2358,7 +2432,7 @@
                                 <form onSubmit={submitProjectExpense} className="p-5 sm:p-6 space-y-4">
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mobile-stack">
                                         <input type="date" value={projExpDate} onChange={e=>setProjExpDate(e.target.value)} required className="w-full min-w-0 !max-w-full" />
-                                        <input type="number" placeholder="金額 $" value={projExpAmount} onChange={e=>setProjExpAmount(e.target.value)} required className="w-full min-w-0 !max-w-full font-black text-xl text-[var(--text-mint)]" />
+                                        <input type="number" inputMode="decimal" pattern="[0-9]*" enterKeyHint="done" placeholder="金額 $" value={projExpAmount} onChange={e=>setProjExpAmount(e.target.value)} required className="w-full min-w-0 !max-w-full font-black text-xl text-[var(--text-mint)]" />
                                     </div>
                                     <select className="w-full min-w-0 !max-w-full" value={projExpItem} onChange={e=>setProjExpItem(e.target.value)} required>
                                         <option value="">選擇分類...</option>
