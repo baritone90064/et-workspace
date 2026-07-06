@@ -482,9 +482,9 @@
             // --- Calendar States ---
             const [currentCalMonth, setCurrentCalMonth] = useState(new Date());
             const [selectedCalDate, setSelectedCalDate] = useState(null); 
-            const [dismissedReminderDate, setDismissedReminderDate] = useState(() => {
-                try { return localStorage.getItem('teLifeLogDismissedReminderDate') || ''; }
-                catch (error) { return ''; }
+            const [isHomeReminderCollapsed, setIsHomeReminderCollapsed] = useState(() => {
+                try { return localStorage.getItem('teLifeLogCollapsedReminderDate') === getLocalDateString(); }
+                catch (error) { return false; }
             });
 
             // Custom Dialogs
@@ -1720,11 +1720,15 @@
                 return end ? `${start} → ${end}` : start;
             };
 
-            const dismissHomeReminders = () => {
-                const today = getLocalDateString();
-                try { localStorage.setItem('teLifeLogDismissedReminderDate', today); }
-                catch (error) {}
-                setDismissedReminderDate(today);
+            const toggleHomeRemindersCollapse = () => {
+                setIsHomeReminderCollapsed(prev => {
+                    const next = !prev;
+                    try {
+                        if (next) localStorage.setItem('teLifeLogCollapsedReminderDate', getLocalDateString());
+                        else localStorage.removeItem('teLifeLogCollapsedReminderDate');
+                    } catch (error) {}
+                    return next;
+                });
             };
 
             const openProjectFromReminder = (project) => {
@@ -1796,23 +1800,32 @@
             ) : null;
 
             const renderHomeScheduleReminders = () => {
-                const today = getLocalDateString();
-                if (dismissedReminderDate === today) return null;
                 const hasReminders = homeScheduleReminders.todayProjects.length > 0 || homeScheduleReminders.tomorrowProjects.length > 0;
                 if (!hasReminders) return null;
+                const reminderCount = homeScheduleReminders.todayProjects.length + homeScheduleReminders.tomorrowProjects.length;
                 return (
                     <div className="bubble-card bg-white/80 p-4 space-y-3 border-2 border-[var(--pastel-yellow)]/40">
-                        <div className="flex items-center justify-between gap-2 px-1">
+                        <button type="button" onClick={toggleHomeRemindersCollapse} className="w-full flex items-center justify-between gap-2 px-1 text-left" title={isHomeReminderCollapsed ? '展開行程提醒' : '收合行程提醒'}>
                             <div className="flex items-center gap-2 min-w-0">
                                 <div className="bg-[var(--pastel-yellow)] p-2 rounded-2xl flex-shrink-0"><Icon name="bell" size={20} className="text-[var(--text-yellow)]" /></div>
-                                <h3 className="font-black text-lg text-[var(--bubble-text)] truncate">行程提醒</h3>
+                                <div className="min-w-0">
+                                    <h3 className="font-black text-lg text-[var(--bubble-text)] truncate">行程提醒</h3>
+                                    {isHomeReminderCollapsed && <div className="font-bold text-[12px] text-slate-400">今日 / 明日共 {reminderCount} 項</div>}
+                                </div>
                             </div>
-                            <button type="button" onClick={dismissHomeReminders} className="bg-white text-slate-400 hover:text-slate-600 hover:bg-slate-100 p-2 rounded-full transition-colors shadow-sm border border-gray-100" title="今天不再顯示">
-                                <Icon name="x" size={16} />
-                            </button>
-                        </div>
-                        {renderReminderList('今日行程', homeScheduleReminders.today, homeScheduleReminders.todayProjects, 'calendar-check', 'bg-[var(--pastel-mint)] text-[var(--text-mint)]')}
-                        {renderReminderList('明日行程', homeScheduleReminders.tomorrow, homeScheduleReminders.tomorrowProjects, 'calendar-clock', 'bg-[var(--pastel-blue)] text-[var(--text-blue)]')}
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                                {!isHomeReminderCollapsed && <span className="tag bg-[var(--pastel-gray)] text-gray-600">{reminderCount} 項</span>}
+                                <span className="bg-white text-slate-400 p-2 rounded-full shadow-sm border border-gray-100">
+                                    <Icon name={isHomeReminderCollapsed ? "chevron-down" : "chevron-up"} size={16} />
+                                </span>
+                            </div>
+                        </button>
+                        {!isHomeReminderCollapsed && (
+                            <div className="space-y-3">
+                                {renderReminderList('今日行程', homeScheduleReminders.today, homeScheduleReminders.todayProjects, 'calendar-check', 'bg-[var(--pastel-mint)] text-[var(--text-mint)]')}
+                                {renderReminderList('明日行程', homeScheduleReminders.tomorrow, homeScheduleReminders.tomorrowProjects, 'calendar-clock', 'bg-[var(--pastel-blue)] text-[var(--text-blue)]')}
+                            </div>
+                        )}
                     </div>
                 );
             };
