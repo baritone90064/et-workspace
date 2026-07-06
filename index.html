@@ -482,6 +482,10 @@
             // --- Calendar States ---
             const [currentCalMonth, setCurrentCalMonth] = useState(new Date());
             const [selectedCalDate, setSelectedCalDate] = useState(null); 
+            const [dismissedReminderDate, setDismissedReminderDate] = useState(() => {
+                try { return localStorage.getItem('teLifeLogDismissedReminderDate') || ''; }
+                catch (error) { return ''; }
+            });
 
             // Custom Dialogs
             const [confirmDialog, setConfirmDialog] = useState({ isOpen: false, title: '', message: '', onConfirm: null });
@@ -1538,7 +1542,7 @@
                 const tomorrow = getNextDateString(today);
 
                 const findProjectsForDate = (targetDate) => projects
-                    .filter(p => p.showInCalendar !== false && projectOverlapsDateRange(p, targetDate, targetDate))
+                    .filter(p => !p.completed && p.showInCalendar !== false && projectOverlapsDateRange(p, targetDate, targetDate))
                     .sort((a, b) => {
                         const dateA = a.startDate || a.createdAt || '';
                         const dateB = b.startDate || b.createdAt || '';
@@ -1710,6 +1714,38 @@
             }, [activeTab, analyticsData]);
 
 
+            const formatProjectReminderDate = (project) => {
+                const start = project.startDate || '未設定日期';
+                const end = project.endDate && project.endDate !== project.startDate ? project.endDate : '';
+                return end ? `${start} → ${end}` : start;
+            };
+
+            const dismissHomeReminders = () => {
+                const today = getLocalDateString();
+                try { localStorage.setItem('teLifeLogDismissedReminderDate', today); }
+                catch (error) {}
+                setDismissedReminderDate(today);
+            };
+
+            const openProjectFromReminder = (project) => {
+                if (!project) return;
+                setActiveTab('projects');
+                setProjectSubTab(project.completed ? 'completed' : 'active');
+                setProjectKeyword('');
+                setProjectYearFilter('all');
+                setProjectMonthFilter('all');
+                setSelectedCalDate(null);
+                setExpandedProject(prev => ({ ...prev, [project.id]: true }));
+                if (project.startDate) {
+                    const parsedDate = new Date(`${project.startDate}T00:00:00`);
+                    if (!Number.isNaN(parsedDate.getTime())) setCurrentCalMonth(parsedDate);
+                }
+                setTimeout(() => {
+                    const target = document.getElementById(`project-card-${project.id}`);
+                    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }, 250);
+            };
+
             const renderAttachmentLinks = (links = []) => links.length > 0 ? (
                 <div className="flex flex-wrap gap-2 mt-2">
                     {links.map((link, idx) => (
@@ -1746,16 +1782,11 @@
                     </div>
                     <div className="space-y-2">
                         {reminderProjects.slice(0, 5).map(p => (
-                            <div key={p.id} className="flex items-start gap-2 bg-[#F8FAFC] rounded-[16px] p-3">
-                                <Icon name={p.completed ? 'check-circle-2' : 'calendar-days'} size={16} className={p.completed ? 'text-[var(--text-blue)] mt-0.5' : 'text-[var(--text-mint)] mt-0.5'} />
-                                <div className="min-w-0 flex-grow">
-                                    <div className="font-black text-[14px] text-slate-700 truncate">{p.text}</div>
-                                    <div className="font-bold text-[12px] text-slate-400 mt-0.5">
-                                        {p.startDate || '未設定日期'}{p.endDate && p.endDate !== p.startDate ? ` → ${p.endDate}` : ''}
-                                        <span className="ml-2">{p.completed ? '已結束' : '進行中'}</span>
-                                    </div>
-                                </div>
-                            </div>
+                            <button key={p.id} type="button" onClick={()=>openProjectFromReminder(p)} className="w-full flex items-center gap-2 bg-[#F8FAFC] rounded-[16px] p-3 text-left hover:bg-[var(--bubble-bg)] transition-colors">
+                                <Icon name="calendar-days" size={16} className="text-[var(--text-mint)] flex-shrink-0" />
+                                <span className="min-w-0 flex-grow font-black text-[14px] text-slate-700 truncate">{p.text}</span>
+                                <span className="flex-shrink-0 font-bold text-[11px] text-slate-400 whitespace-nowrap">{formatProjectReminderDate(p)}</span>
+                            </button>
                         ))}
                         {reminderProjects.length > 5 && (
                             <div className="text-center font-bold text-[12px] text-slate-400 pt-1">還有 {reminderProjects.length - 5} 項，請到專案頁查看</div>
@@ -1765,16 +1796,20 @@
             ) : null;
 
             const renderHomeScheduleReminders = () => {
+                const today = getLocalDateString();
+                if (dismissedReminderDate === today) return null;
                 const hasReminders = homeScheduleReminders.todayProjects.length > 0 || homeScheduleReminders.tomorrowProjects.length > 0;
                 if (!hasReminders) return null;
                 return (
                     <div className="bubble-card bg-white/80 p-4 space-y-3 border-2 border-[var(--pastel-yellow)]/40">
-                        <div className="flex items-center gap-2 px-1">
-                            <div className="bg-[var(--pastel-yellow)] p-2 rounded-2xl"><Icon name="bell" size={20} className="text-[var(--text-yellow)]" /></div>
-                            <div>
-                                <h3 className="font-black text-lg text-[var(--bubble-text)]">行程提醒</h3>
-                                <p className="font-bold text-[12px] text-slate-400">只顯示已開啟行事曆顯示的專案</p>
+                        <div className="flex items-center justify-between gap-2 px-1">
+                            <div className="flex items-center gap-2 min-w-0">
+                                <div className="bg-[var(--pastel-yellow)] p-2 rounded-2xl flex-shrink-0"><Icon name="bell" size={20} className="text-[var(--text-yellow)]" /></div>
+                                <h3 className="font-black text-lg text-[var(--bubble-text)] truncate">行程提醒</h3>
                             </div>
+                            <button type="button" onClick={dismissHomeReminders} className="bg-white text-slate-400 hover:text-slate-600 hover:bg-slate-100 p-2 rounded-full transition-colors shadow-sm border border-gray-100" title="今天不再顯示">
+                                <Icon name="x" size={16} />
+                            </button>
                         </div>
                         {renderReminderList('今日行程', homeScheduleReminders.today, homeScheduleReminders.todayProjects, 'calendar-check', 'bg-[var(--pastel-mint)] text-[var(--text-mint)]')}
                         {renderReminderList('明日行程', homeScheduleReminders.tomorrow, homeScheduleReminders.tomorrowProjects, 'calendar-clock', 'bg-[var(--pastel-blue)] text-[var(--text-blue)]')}
@@ -1975,7 +2010,7 @@
                             const checklists = t.checklist || [];
                             
                             return (
-                                <div key={t.id} className={`bubble-card overflow-hidden ${t.completed ? 'opacity-70 bg-gray-50' : 'bg-white'}`}>
+                                <div key={t.id} id={`project-card-${t.id}`} className={`bubble-card overflow-hidden ${t.completed ? 'opacity-70 bg-gray-50' : 'bg-white'}`}>
                                     <div className="p-6 cursor-pointer hover:bg-[var(--bubble-bg)]/50 flex items-start gap-4 transition-colors" onClick={()=>setExpandedProject({...expandedProject, [t.id]: !isExpanded})}>
                                         <div className="mt-1"><Icon name={isExpanded ? "folder-open" : "folder"} size={26} className="text-[var(--pastel-blue)]" /></div>
                                         <div className="flex-grow">
