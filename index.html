@@ -363,16 +363,6 @@
             return local.toISOString().split('T')[0];
         };
 
-        const generateRecentMonths = (count = 36) => {
-            const [year, month] = getCurrentMonthString().split('-').map(Number);
-            return Array.from({ length: count }, (_, index) => {
-                const d = new Date(year, month - 1 - index, 1);
-                const yyyy = d.getFullYear();
-                const mm = String(d.getMonth() + 1).padStart(2, '0');
-                return `${yyyy}-${mm}`;
-            });
-        };
-
         const getMonthEndDateString = (year, month) => {
             const end = new Date(Number(year), Number(month), 0);
             const yyyy = end.getFullYear();
@@ -512,10 +502,13 @@
             
             // --- Filter & Sort States ---
             const [dailySort, setDailySort] = useState('desc'); 
-            const [dailyMonthFilter, setDailyMonthFilter] = useState(getCurrentMonthString()); 
-            const emptyDailyQuery = { start: '', end: '', item: 'all', owner: 'all', note: '' };
-            const [dailyQuery, setDailyQuery] = useState(emptyDailyQuery);
-            const [dailyQueryDraft, setDailyQueryDraft] = useState(emptyDailyQuery);
+            // 日常流水帳預設只載入本月；使用者需要其他期間時，再從查詢面板調整日期。
+            const getDefaultDailyQuery = () => {
+                const range = getMonthDateRange(getCurrentMonthString());
+                return { start: range.start, end: range.end, item: 'all', owner: 'all', note: '' };
+            };
+            const [dailyQuery, setDailyQuery] = useState(() => getDefaultDailyQuery());
+            const [dailyQueryDraft, setDailyQueryDraft] = useState(() => getDefaultDailyQuery());
             const [isDailyQueryOpen, setIsDailyQueryOpen] = useState(false);
 
             const [projectSort, setProjectSort] = useState('asc'); 
@@ -528,14 +521,22 @@
             const [isProjectQueryOpen, setIsProjectQueryOpen] = useState(false);
             
             // --- Analytics Range & Additional Filters States ---
-            const [analyticsStart, setAnalyticsStart] = useState(getMonthDateRange(getCurrentMonthString()).start);
-            const [analyticsEnd, setAnalyticsEnd] = useState(getLocalDateString());
+            // analytics* 是已套用條件；analyticsDraft* 是使用者尚在編輯的條件。
+            // 圖表與統計資料只依已套用條件更新，避免每改一個欄位就重新讀取與重畫。
+            const initialAnalyticsRange = getMonthDateRange(getCurrentMonthString());
+            const [analyticsStart, setAnalyticsStart] = useState(initialAnalyticsRange.start);
+            const [analyticsEnd, setAnalyticsEnd] = useState(initialAnalyticsRange.end);
             const [analyticsCatFilter, setAnalyticsCatFilter] = useState('all');
             const [analyticsOwnerFilter, setAnalyticsOwnerFilter] = useState('all');
             const [analyticsKeyword, setAnalyticsKeyword] = useState('');
+            const [analyticsDraftStart, setAnalyticsDraftStart] = useState(initialAnalyticsRange.start);
+            const [analyticsDraftEnd, setAnalyticsDraftEnd] = useState(initialAnalyticsRange.end);
+            const [analyticsDraftCatFilter, setAnalyticsDraftCatFilter] = useState('all');
+            const [analyticsDraftOwnerFilter, setAnalyticsDraftOwnerFilter] = useState('all');
+            const [analyticsDraftKeyword, setAnalyticsDraftKeyword] = useState('');
             const [analyticsListSort, setAnalyticsListSort] = useState('desc');
             const [isAnalyticsFilterOpen, setIsAnalyticsFilterOpen] = useState(true);
-            const [isAnalyticsDateInvalid, setIsAnalyticsDateInvalid] = useState(false);
+            const isAnalyticsDraftDateInvalid = Boolean(analyticsDraftStart && analyticsDraftEnd && analyticsDraftEnd < analyticsDraftStart);
 
             // --- Calendar States ---
             const [currentCalMonth, setCurrentCalMonth] = useState(new Date());
@@ -933,14 +934,9 @@
                 const path = db.collection('artifacts').doc(appId).collection('public').doc('data');
                 let query = path.collection('dailyExpenses');
 
-                const isQueryActive = dailyQuery.start || dailyQuery.end || dailyQuery.item !== 'all' || dailyQuery.owner !== 'all' || dailyQuery.note.trim();
-                if (isQueryActive) {
-                    if (dailyQuery.start) query = query.where('date', '>=', dailyQuery.start);
-                    if (dailyQuery.end) query = query.where('date', '<', getNextDateString(dailyQuery.end));
-                } else if (dailyMonthFilter !== 'all') {
-                    const { start, end } = getMonthDateRange(dailyMonthFilter);
-                    query = query.where('date', '>=', start).where('date', '<', getNextDateString(end));
-                }
+                // 日常資料預設查詢本月；需要其他期間時，由日常查詢面板改變日期範圍。
+                if (dailyQuery.start) query = query.where('date', '>=', dailyQuery.start);
+                if (dailyQuery.end) query = query.where('date', '<', getNextDateString(dailyQuery.end));
 
                 setIsDailyLoading(true);
                 setLoadedSources(prev => ({ ...prev, daily: false }));
@@ -959,7 +955,7 @@
                 );
 
                 return () => unsubDaily();
-            }, [user, dailyMonthFilter, dailyQuery]);
+            }, [user, dailyQuery]);
 
             useEffect(() => {
                 if (!user || !isAllowedEmail(getFirebaseUserEmail(user))) return;
@@ -992,10 +988,6 @@
                     saveDailyOwner(nextOwner);
                 }
             }, [dailyOwnerOptions]);
-
-            useEffect(() => {
-                setIsAnalyticsDateInvalid(analyticsStart && analyticsEnd && analyticsEnd < analyticsStart);
-            }, [analyticsStart, analyticsEnd]);
 
             useEffect(() => {
                 if (!user || !isAllowedEmail(getFirebaseUserEmail(user)) || activeTab !== 'analytics') return;
@@ -1036,8 +1028,6 @@
                         date: dailyDate, amount: parseFloat(dailyAmount), item: dailyItem, desc: dailyDesc, owner: dailyOwner, updatedAt: new Date().toISOString(), createdAt: new Date().toISOString()
                     };
                     await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('dailyExpenses').add(data);
-                    const entryMonth = (dailyDate || '').substring(0, 7);
-                    if (entryMonth && dailyMonthFilter !== 'all' && dailyMonthFilter !== entryMonth) setDailyMonthFilter(entryMonth);
                     saveDailyOwner(dailyOwner);
                     setDailyDate(getLocalDateString());
                     setDailyAmount(''); setDailyDesc('');
@@ -1056,8 +1046,6 @@
                     await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('dailyExpenses').doc(dailyEditData.id).update({
                         date: dailyEditData.date, amount: parseFloat(dailyEditData.amount), item: dailyEditData.item, desc: dailyEditData.desc, owner: dailyEditData.owner, updatedAt: new Date().toISOString()
                     });
-                    const editedMonth = (dailyEditData.date || '').substring(0, 7);
-                    if (editedMonth && dailyMonthFilter !== 'all' && dailyMonthFilter !== editedMonth) setDailyMonthFilter(editedMonth);
                     setDailyEditData(null);
                 } catch (err) {
                     console.error('更新日常記帳失敗:', err);
@@ -1601,8 +1589,11 @@
             };
 
             const handleExportDailyCSV = () => {
-                const rows = dailyExpenses.map(d => [d.date || '', d.amount || 0, d.item || '', d.desc || '', d.owner || '']);
-                downloadCSV(`TE_LifeLog_Daily_Expenses_${dailyMonthFilter === 'all' ? 'All' : dailyMonthFilter}.csv`, ["日期", "金額", "費用分類", "備註", "成員"], rows);
+                const rows = displayDaily.map(d => [d.date || '', d.amount || 0, d.item || '', d.desc || '', d.owner || '']);
+                const rangeLabel = dailyQuery.start || dailyQuery.end
+                    ? `${dailyQuery.start || 'Start'}_${dailyQuery.end || 'End'}`
+                    : 'All';
+                downloadCSV(`TE_LifeLog_Daily_Expenses_${rangeLabel}.csv`, ["日期", "金額", "費用分類", "備註", "成員"], rows);
             };
 
             const handleExportProjectCSV = () => {
@@ -1648,7 +1639,6 @@
                         }
 
                         const refBase = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('dailyExpenses');
-                        const importedMonths = new Set();
                         const skippedReasons = [];
                         const now = new Date().toISOString();
                         let batch = db.batch();
@@ -1695,16 +1685,10 @@
                             });
                             batchOps++;
                             count++;
-                            importedMonths.add(date.substring(0, 7));
                             await commitIfNeeded();
                         }
 
                         await commitIfNeeded(true);
-
-                        if (count > 0) {
-                            const latestMonth = Array.from(importedMonths).sort().reverse()[0];
-                            if (latestMonth && dailyMonthFilter !== 'all') setDailyMonthFilter(latestMonth);
-                        }
 
                         const detail = skippedReasons.length ? `\n\n略過原因範例：\n${skippedReasons.join('\n')}` : '';
                         alert(`日常記帳匯入完成！\n成功：${count} 筆\n略過：${skipped} 筆${detail}`);
@@ -1843,7 +1827,14 @@
 
 
             const hasDailyQuery = useMemo(() => {
-                return Boolean(dailyQuery.start || dailyQuery.end || dailyQuery.item !== 'all' || dailyQuery.owner !== 'all' || dailyQuery.note.trim());
+                const defaultQuery = getDefaultDailyQuery();
+                return Boolean(
+                    dailyQuery.start !== defaultQuery.start ||
+                    dailyQuery.end !== defaultQuery.end ||
+                    dailyQuery.item !== 'all' ||
+                    dailyQuery.owner !== 'all' ||
+                    dailyQuery.note.trim()
+                );
             }, [dailyQuery]);
 
             const hasProjectQuery = useMemo(() => {
@@ -1852,7 +1843,12 @@
 
             const openDailyQueryPanel = () => { setDailyQueryDraft({...dailyQuery}); setIsDailyQueryOpen(true); };
             const applyDailyQuery = () => { setDailyQuery({...dailyQueryDraft}); setIsDailyQueryOpen(false); };
-            const clearDailyQuery = () => { setDailyQuery(emptyDailyQuery); setDailyQueryDraft(emptyDailyQuery); setIsDailyQueryOpen(false); };
+            const clearDailyQuery = () => {
+                const defaultQuery = getDefaultDailyQuery();
+                setDailyQuery(defaultQuery);
+                setDailyQueryDraft({...defaultQuery});
+                setIsDailyQueryOpen(false);
+            };
             const applyDailyDateShortcut = (shortcut) => {
                 const range = getDateRangeByShortcut(shortcut);
                 setDailyQueryDraft(prev => ({ ...prev, start: range.start, end: range.end }));
@@ -1868,17 +1864,34 @@
 
             const applyAnalyticsDateShortcut = (shortcut) => {
                 const range = getDateRangeByShortcut(shortcut);
-                setAnalyticsStart(range.start);
-                setAnalyticsEnd(range.end);
+                setAnalyticsDraftStart(range.start);
+                setAnalyticsDraftEnd(range.end);
+            };
+
+            const applyAnalyticsFilters = () => {
+                if (isAnalyticsDraftDateInvalid) return;
+                setAnalyticsStart(analyticsDraftStart);
+                setAnalyticsEnd(analyticsDraftEnd);
+                setAnalyticsCatFilter(analyticsDraftCatFilter);
+                setAnalyticsOwnerFilter(analyticsDraftOwnerFilter);
+                setAnalyticsKeyword(analyticsDraftKeyword.trim());
+                setIsAnalyticsFilterOpen(false);
             };
 
             const clearAnalyticsFilters = () => {
-                const range = getMonthDateRange(getCurrentMonthString());
-                setAnalyticsStart(range.start);
-                setAnalyticsEnd(getLocalDateString());
+                // 清除自訂條件後，回到系統預設的本月統計，而不是載入全部歷史資料。
+                const currentMonthRange = getMonthDateRange(getCurrentMonthString());
+                setAnalyticsDraftStart(currentMonthRange.start);
+                setAnalyticsDraftEnd(currentMonthRange.end);
+                setAnalyticsDraftCatFilter('all');
+                setAnalyticsDraftOwnerFilter('all');
+                setAnalyticsDraftKeyword('');
+                setAnalyticsStart(currentMonthRange.start);
+                setAnalyticsEnd(currentMonthRange.end);
                 setAnalyticsCatFilter('all');
                 setAnalyticsOwnerFilter('all');
                 setAnalyticsKeyword('');
+                setIsAnalyticsFilterOpen(false);
             };
 
             const dailyQuerySummary = useMemo(() => {
@@ -1904,8 +1917,6 @@
             }, [projectQuery, selectedCalDate, hasProjectQuery]);
 
             // --- 計算與顯示處理 ---
-            const availableDailyMonths = useMemo(() => generateRecentMonths(36), []);
-
             const displayDaily = useMemo(() => {
                 let filtered = [...dailyExpenses];
                 if (hasDailyQuery) {
@@ -1914,15 +1925,13 @@
                     if (dailyQuery.item !== 'all') filtered = filtered.filter(d => d.item === dailyQuery.item);
                     if (dailyQuery.owner !== 'all') filtered = filtered.filter(d => normalizeSearchText(d.owner) === normalizeSearchText(dailyQuery.owner));
                     if (dailyQuery.note.trim()) filtered = filtered.filter(d => containsSearchText(d.desc, dailyQuery.note));
-                } else if (dailyMonthFilter !== 'all') {
-                    filtered = filtered.filter(d => (d.date || '').startsWith(dailyMonthFilter));
                 }
                 filtered.sort((a, b) => {
                     const dateA = a.date || ''; const dateB = b.date || '';
                     return dailySort === 'desc' ? dateB.localeCompare(dateA) : dateA.localeCompare(dateB);
                 });
                 return filtered;
-            }, [dailyExpenses, dailyMonthFilter, dailySort, dailyQuery, hasDailyQuery]);
+            }, [dailyExpenses, dailySort, dailyQuery, hasDailyQuery]);
 
             const dailyFilteredTotal = useMemo(() => {
                 return displayDaily.reduce((sum, d) => sum + (parseFloat(d.amount) || 0), 0);
@@ -2073,10 +2082,14 @@
                     });
                 });
 
-                const sortedRows = rows.sort((a, b) => analyticsListSort === 'desc' ? (b.date || '').localeCompare(a.date || '') : (a.date || '').localeCompare(b.date || ''));
-                
-                return { sortedOwners: Object.entries(ownerMap).sort((a,b)=>b[1]-a[1]), totalExpense, trendKeys: Object.keys(trendMap).sort(), trendMap, catMap, rows: sortedRows };
-            }, [analyticsDailyExpenses, projects, analyticsStart, analyticsEnd, analyticsCatFilter, analyticsOwnerFilter, analyticsKeyword, analyticsListSort]);
+                return { sortedOwners: Object.entries(ownerMap).sort((a,b)=>b[1]-a[1]), totalExpense, trendKeys: Object.keys(trendMap).sort(), trendMap, catMap, rows };
+            }, [analyticsDailyExpenses, projects, analyticsStart, analyticsEnd, analyticsCatFilter, analyticsOwnerFilter, analyticsKeyword]);
+
+            const sortedAnalyticsRows = useMemo(() => {
+                return [...analyticsData.rows].sort((a, b) => analyticsListSort === 'desc'
+                    ? (b.date || '').localeCompare(a.date || '')
+                    : (a.date || '').localeCompare(b.date || ''));
+            }, [analyticsData.rows, analyticsListSort]);
 
             useEffect(() => {
                 if (activeTab !== 'analytics') return;
@@ -2260,28 +2273,20 @@
                     </form>
 
                     <div className="bubble-card bg-white/60 p-4">
-                        <div className="flex justify-between items-start px-2 mb-4">
-                            <h3 className="font-bold text-lg text-[var(--bubble-text)]/80 flex items-center gap-2 mt-1">
+                        <div className="flex justify-between items-center px-2 mb-4 gap-3">
+                            <h3 className="font-bold text-lg text-[var(--bubble-text)]/80 flex items-center gap-2 min-w-0">
                                 <Icon name="list" size={18} /> 消費明細
                             </h3>
-                            <div className="flex flex-col items-end gap-2">
-                                <div className="flex gap-2">
-                                    {!hasDailyQuery && (
-                                        <select value={dailyMonthFilter} onChange={e=>setDailyMonthFilter(e.target.value)} className="!py-1.5 !px-3 !text-sm !rounded-xl !bg-white shadow-sm border-none font-bold">
-                                            <option value="all">所有月份（讀全部）</option>
-                                            {availableDailyMonths.map(m => <option key={m} value={m}>{m}</option>)}
-                                        </select>
-                                    )}
-                                    <button onClick={openDailyQueryPanel} className={`bubble-btn btn-outline !p-1.5 !rounded-xl !border-none shadow-sm bg-white ${hasDailyQuery ? 'text-[var(--text-blue)] bg-[var(--pastel-blue)]/30' : ''}`} title="日常查詢">
-                                        <Icon name="search" size={18} />
-                                    </button>
-                                    <button onClick={()=>setDailySort(prev => prev === 'desc' ? 'asc' : 'desc')} className="bubble-btn btn-outline !p-1.5 !rounded-xl !border-none shadow-sm bg-white" title={dailySort === 'desc' ? '改為舊到新' : '改為新到舊'}>
-                                        <Icon name={dailySort === 'desc' ? "arrow-down-wide-narrow" : "arrow-up-wide-narrow"} size={18} />
-                                    </button>
-                                </div>
-                                <span className="bg-[var(--pastel-yellow)] text-[var(--text-yellow)] px-3 py-1.5 rounded-full text-sm font-black shadow-sm">
+                            <div className="flex items-center gap-2 shrink-0">
+                                <span className="bg-[var(--pastel-yellow)] text-[var(--text-yellow)] px-3 py-1.5 rounded-full text-sm font-black shadow-sm whitespace-nowrap">
                                     總計: ${dailyFilteredTotal.toLocaleString()}
                                 </span>
+                                <button onClick={openDailyQueryPanel} className={`bubble-btn btn-outline !p-1.5 !rounded-xl !border-none shadow-sm bg-white ${hasDailyQuery ? 'text-[var(--text-blue)] bg-[var(--pastel-blue)]/30' : ''}`} title="日常查詢">
+                                    <Icon name="search" size={18} />
+                                </button>
+                                <button onClick={()=>setDailySort(prev => prev === 'desc' ? 'asc' : 'desc')} className="bubble-btn btn-outline !p-1.5 !rounded-xl !border-none shadow-sm bg-white" title={dailySort === 'desc' ? '改為舊到新' : '改為新到舊'}>
+                                    <Icon name={dailySort === 'desc' ? "arrow-down-wide-narrow" : "arrow-up-wide-narrow"} size={18} />
+                                </button>
                             </div>
                         </div>
                         {hasDailyQuery && (
@@ -2293,7 +2298,7 @@
 
                         <div className="space-y-3">
                             {isDailyLoading && <p className="font-bold text-[var(--bubble-text)]/40 p-5 text-center flex items-center justify-center gap-2"><Icon name="loader" size={16} className="animate-spin" /> 讀取中...</p>}
-                            {!isDailyLoading && displayDaily.length === 0 && <p className="font-bold text-[var(--bubble-text)]/40 p-5 text-center">{hasDailyQuery ? '找不到符合查詢條件的日常紀錄' : '這個月份還沒有花費喔！'}</p>}
+                            {!isDailyLoading && displayDaily.length === 0 && <p className="font-bold text-[var(--bubble-text)]/40 p-5 text-center">{hasDailyQuery ? '找不到符合查詢條件的日常紀錄' : '目前還沒有日常花費紀錄'}</p>}
                             {!isDailyLoading && displayDaily.map(d => (
                                 <div key={d.id} className="p-4 flex justify-between items-center bg-white rounded-[20px] shadow-sm hover:shadow-md transition-shadow group">
                                     <div className="flex items-center gap-4">
@@ -2537,23 +2542,24 @@
                                     <button onClick={()=>applyAnalyticsDateShortcut('lastMonth')} className="bubble-btn btn-outline !py-1.5 !text-xs !rounded-xl">上月</button>
                                 </div>
                                 <div className="grid grid-cols-2 gap-2">
-                                    <input type="date" value={analyticsStart} onChange={e=>setAnalyticsStart(e.target.value)} className="w-full min-w-0 !max-w-full !bg-white !px-2 !py-2 !text-[12px] sm:text-sm text-center" />
-                                    <input type="date" value={analyticsEnd} onChange={e=>setAnalyticsEnd(e.target.value)} className="w-full min-w-0 !max-w-full !bg-white !px-2 !py-2 !text-[12px] sm:text-sm text-center" />
+                                    <input type="date" value={analyticsDraftStart} onChange={e=>setAnalyticsDraftStart(e.target.value)} className="w-full min-w-0 !max-w-full !bg-white !px-2 !py-2 !text-[12px] sm:text-sm text-center" />
+                                    <input type="date" value={analyticsDraftEnd} onChange={e=>setAnalyticsDraftEnd(e.target.value)} className="w-full min-w-0 !max-w-full !bg-white !px-2 !py-2 !text-[12px] sm:text-sm text-center" />
                                 </div>
-                                {isAnalyticsDateInvalid && <div className="text-[var(--text-orange)] text-xs font-bold">截止日期不能早於起始日期！</div>}
+                                {isAnalyticsDraftDateInvalid && <div className="text-[var(--text-orange)] text-xs font-bold">截止日期不能早於起始日期！</div>}
                                 <div className="grid grid-cols-2 gap-2">
-                                    <select value={analyticsCatFilter} onChange={e=>setAnalyticsCatFilter(e.target.value)} className="w-full min-w-0 !max-w-full !py-2 !px-3 !text-sm">
+                                    <select value={analyticsDraftCatFilter} onChange={e=>setAnalyticsDraftCatFilter(e.target.value)} className="w-full min-w-0 !max-w-full !py-2 !px-3 !text-sm">
                                         <option value="all">費用分類</option>
                                         {expenseItems.map(i => <option key={i.id} value={i.name}>{i.name}</option>)}
                                     </select>
-                                    <select value={analyticsOwnerFilter} onChange={e=>setAnalyticsOwnerFilter(e.target.value)} className="w-full min-w-0 !max-w-full !py-2 !px-3 !text-sm">
+                                    <select value={analyticsDraftOwnerFilter} onChange={e=>setAnalyticsDraftOwnerFilter(e.target.value)} className="w-full min-w-0 !max-w-full !py-2 !px-3 !text-sm">
                                         <option value="all">成員</option>
                                         {dailyOwnerOptions.map(o => <option key={o} value={o}>{o}</option>)}
                                     </select>
                                 </div>
-                                <input type="text" value={analyticsKeyword} onChange={e=>setAnalyticsKeyword(e.target.value)} placeholder="關鍵字：備註、專案名稱..." className="w-full min-w-0 !max-w-full !py-2 !px-3 !text-sm" />
-                                <div className="flex justify-end">
-                                    <button onClick={clearAnalyticsFilters} className="bubble-btn btn-outline !py-1.5 !px-4 !text-xs"><Icon name="rotate-ccw" size={14}/> 重設</button>
+                                <input type="text" value={analyticsDraftKeyword} onChange={e=>setAnalyticsDraftKeyword(e.target.value)} placeholder="關鍵字：備註、專案名稱..." className="w-full min-w-0 !max-w-full !py-2 !px-3 !text-sm" />
+                                <div className="flex gap-3 pt-2">
+                                    <button onClick={clearAnalyticsFilters} className="bubble-btn btn-outline flex-1 py-3"><Icon name="rotate-ccw" size={16}/> 清除</button>
+                                    <button onClick={applyAnalyticsFilters} disabled={isAnalyticsDraftDateInvalid} className="bubble-btn btn-primary flex-1 py-3"><Icon name="check" size={16}/> 套用</button>
                                 </div>
                             </div>
                         )}
@@ -2614,8 +2620,8 @@
                             </button>
                         </div>
                         <div className="space-y-3">
-                            {analyticsData.rows.length === 0 && <div className="text-center font-bold text-gray-400 py-4">無符合條件資料</div>}
-                            {analyticsData.rows.map((row, idx) => (
+                            {sortedAnalyticsRows.length === 0 && <div className="text-center font-bold text-gray-400 py-4">無符合條件資料</div>}
+                            {sortedAnalyticsRows.map((row, idx) => (
                                 <div key={`${row.source}-${row.date}-${idx}`} className="p-3 rounded-[18px] bg-[var(--bubble-bg)]/60 flex justify-between gap-3 items-start">
                                     <div className="min-w-0">
                                         <div className="flex items-center gap-2 mb-1">
