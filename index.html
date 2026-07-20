@@ -289,6 +289,9 @@
         const db = firebase.firestore();
         const auth = firebase.auth();
         const storage = firebase.storage(); // 初始化 Firebase Storage
+        const googleProvider = new firebase.auth.GoogleAuthProvider();
+        googleProvider.setCustomParameters({ prompt: 'select_account' });
+        const ALLOWED_EMAILS = ['baritone90064@gmail.com', 'terry4410@gmail.com'];
 
         const { useState, useEffect, useMemo, useRef } = React;
 
@@ -309,6 +312,41 @@
                 return local.toISOString().split('T')[0];
             };
             return { start: toLocalISO(startDate), end: toLocalISO(endDate) };
+        };
+
+        const getYearDateRange = (year = new Date().getFullYear()) => ({ start: `${year}-01-01`, end: `${year}-12-31` });
+
+        const getPreviousMonthString = () => {
+            const current = getCurrentMonthString();
+            const [year, month] = current.split('-').map(Number);
+            const prev = new Date(year, month - 2, 1);
+            return `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`;
+        };
+
+        const getDateRangeByShortcut = (shortcut) => {
+            if (shortcut === 'year') return getYearDateRange();
+            if (shortcut === 'month') return getMonthDateRange(getCurrentMonthString());
+            if (shortcut === 'lastMonth') return getMonthDateRange(getPreviousMonthString());
+            return { start: '', end: '' };
+        };
+
+        const normalizeSearchText = (value) => String(value || '')
+            .toLowerCase()
+            .replace(/；/g, ';')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        const containsSearchText = (source, keyword) => {
+            const k = normalizeSearchText(keyword);
+            if (!k) return true;
+            return normalizeSearchText(source).includes(k);
+        };
+
+        const formatQueryDateSummary = (start, end) => {
+            if (start && end) return `${start}～${end}`;
+            if (start) return `${start} 之後`;
+            if (end) return `${end} 以前`;
+            return '';
         };
 
         const getNextDateString = (dateStr) => {
@@ -467,16 +505,28 @@
             // --- Filter & Sort States ---
             const [dailySort, setDailySort] = useState('desc'); 
             const [dailyMonthFilter, setDailyMonthFilter] = useState(getCurrentMonthString()); 
+            const emptyDailyQuery = { start: '', end: '', item: 'all', owner: 'all', note: '' };
+            const [dailyQuery, setDailyQuery] = useState(emptyDailyQuery);
+            const [dailyQueryDraft, setDailyQueryDraft] = useState(emptyDailyQuery);
+            const [isDailyQueryOpen, setIsDailyQueryOpen] = useState(false);
+
             const [projectSort, setProjectSort] = useState('asc'); 
             const [projectKeyword, setProjectKeyword] = useState('');
             const [projectYearFilter, setProjectYearFilter] = useState('all');
             const [projectMonthFilter, setProjectMonthFilter] = useState('all');
+            const emptyProjectQuery = { text: '', start: '', end: '', category: 'all', expenseItem: 'all', owner: 'all' };
+            const [projectQuery, setProjectQuery] = useState(emptyProjectQuery);
+            const [projectQueryDraft, setProjectQueryDraft] = useState(emptyProjectQuery);
+            const [isProjectQueryOpen, setIsProjectQueryOpen] = useState(false);
             
             // --- Analytics Range & Additional Filters States ---
             const [analyticsStart, setAnalyticsStart] = useState(getMonthDateRange(getCurrentMonthString()).start);
             const [analyticsEnd, setAnalyticsEnd] = useState(getLocalDateString());
             const [analyticsCatFilter, setAnalyticsCatFilter] = useState('all');
             const [analyticsOwnerFilter, setAnalyticsOwnerFilter] = useState('all');
+            const [analyticsKeyword, setAnalyticsKeyword] = useState('');
+            const [analyticsListSort, setAnalyticsListSort] = useState('desc');
+            const [isAnalyticsFilterOpen, setIsAnalyticsFilterOpen] = useState(true);
             const [isAnalyticsDateInvalid, setIsAnalyticsDateInvalid] = useState(false);
 
             // --- Calendar States ---
@@ -556,22 +606,41 @@
                 saveDailyOwner(owner);
             };
 
+            const isAllowedEmail = (email) => ALLOWED_EMAILS.map(e => e.toLowerCase()).includes(String(email || '').toLowerCase());
+
+            const signInWithGoogle = async () => {
+                try {
+                    await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
+                    await auth.signInWithRedirect(googleProvider);
+                } catch (err) {
+                    console.error('Google 登入失敗:', err);
+                    alert(`Google 登入失敗：${err.message || '請稍後再試'}`);
+                }
+            };
+
+            const signOutUser = async () => {
+                try { await auth.signOut(); }
+                catch (err) {
+                    console.error('登出失敗:', err);
+                    alert(`登出失敗：${err.message || '請稍後再試'}`);
+                }
+            };
+
             useEffect(() => {
-                const initAuth = async () => {
-                    try {
-                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) await auth.signInWithCustomToken(__initial_auth_token);
-                        else await auth.signInAnonymously();
-                    } catch (err) {
-                        console.error('登入失敗:', err);
-                        setIsInitialLoading(false);
-                    }
-                };
-                initAuth();
-                return auth.onAuthStateChanged(setUser);
+                auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(err => console.warn('登入狀態保存設定失敗:', err));
+                const unsubscribe = auth.onAuthStateChanged(currentUser => {
+                    setUser(currentUser);
+                    if (!currentUser) setIsInitialLoading(false);
+                });
+                auth.getRedirectResult().catch(err => {
+                    console.error('Google 登入返回處理失敗:', err);
+                    setIsInitialLoading(false);
+                });
+                return unsubscribe;
             }, []);
 
             useEffect(() => {
-                if (!user) return;
+                if (!user || !isAllowedEmail(user.email)) return;
                 setIsInitialLoading(true);
                 setLoadedSources({ daily: false, projects: false, categories: false, expenseItems: false, members: false });
 
@@ -626,11 +695,15 @@
             }, [user]);
 
             useEffect(() => {
-                if (!user) return;
+                if (!user || !isAllowedEmail(user.email)) return;
                 const path = db.collection('artifacts').doc(appId).collection('public').doc('data');
                 let query = path.collection('dailyExpenses');
 
-                if (dailyMonthFilter !== 'all') {
+                const isQueryActive = dailyQuery.start || dailyQuery.end || dailyQuery.item !== 'all' || dailyQuery.owner !== 'all' || dailyQuery.note.trim();
+                if (isQueryActive) {
+                    if (dailyQuery.start) query = query.where('date', '>=', dailyQuery.start);
+                    if (dailyQuery.end) query = query.where('date', '<', getNextDateString(dailyQuery.end));
+                } else if (dailyMonthFilter !== 'all') {
                     const { start, end } = getMonthDateRange(dailyMonthFilter);
                     query = query.where('date', '>=', start).where('date', '<', end);
                 }
@@ -652,10 +725,10 @@
                 );
 
                 return () => unsubDaily();
-            }, [user, dailyMonthFilter]);
+            }, [user, dailyMonthFilter, dailyQuery]);
 
             useEffect(() => {
-                if (user && Object.values(loadedSources).every(Boolean)) setIsInitialLoading(false);
+                if (user && isAllowedEmail(user.email) && Object.values(loadedSources).every(Boolean)) setIsInitialLoading(false);
             }, [user, loadedSources]);
 
             useEffect(() => {
@@ -677,7 +750,7 @@
             }, [analyticsStart, analyticsEnd]);
 
             useEffect(() => {
-                if (!user || activeTab !== 'analytics') return;
+                if (!user || !isAllowedEmail(user.email) || activeTab !== 'analytics') return;
                 if (analyticsStart && analyticsEnd && analyticsEnd < analyticsStart) return;
 
                 const path = db.collection('artifacts').doc(appId).collection('public').doc('data');
@@ -1520,18 +1593,88 @@
             };
 
 
+
+            const hasDailyQuery = useMemo(() => {
+                return Boolean(dailyQuery.start || dailyQuery.end || dailyQuery.item !== 'all' || dailyQuery.owner !== 'all' || dailyQuery.note.trim());
+            }, [dailyQuery]);
+
+            const hasProjectQuery = useMemo(() => {
+                return Boolean(projectQuery.text.trim() || projectQuery.start || projectQuery.end || projectQuery.category !== 'all' || projectQuery.expenseItem !== 'all' || projectQuery.owner !== 'all' || selectedCalDate);
+            }, [projectQuery, selectedCalDate]);
+
+            const openDailyQueryPanel = () => { setDailyQueryDraft({...dailyQuery}); setIsDailyQueryOpen(true); };
+            const applyDailyQuery = () => { setDailyQuery({...dailyQueryDraft}); setIsDailyQueryOpen(false); };
+            const clearDailyQuery = () => { setDailyQuery(emptyDailyQuery); setDailyQueryDraft(emptyDailyQuery); setIsDailyQueryOpen(false); };
+            const applyDailyDateShortcut = (shortcut) => {
+                const range = getDateRangeByShortcut(shortcut);
+                setDailyQueryDraft(prev => ({ ...prev, start: range.start, end: range.end }));
+            };
+
+            const openProjectQueryPanel = () => { setProjectQueryDraft({...projectQuery}); setIsProjectQueryOpen(true); };
+            const applyProjectQuery = () => { setProjectQuery({...projectQueryDraft}); setIsProjectQueryOpen(false); };
+            const clearProjectQuery = () => { setProjectQuery(emptyProjectQuery); setProjectQueryDraft(emptyProjectQuery); setProjectKeyword(''); setProjectYearFilter('all'); setProjectMonthFilter('all'); setSelectedCalDate(null); setIsProjectQueryOpen(false); };
+            const applyProjectDateShortcut = (shortcut) => {
+                const range = getDateRangeByShortcut(shortcut);
+                setProjectQueryDraft(prev => ({ ...prev, start: range.start, end: range.end }));
+            };
+
+            const applyAnalyticsDateShortcut = (shortcut) => {
+                const range = getDateRangeByShortcut(shortcut);
+                setAnalyticsStart(range.start);
+                setAnalyticsEnd(range.end);
+            };
+
+            const clearAnalyticsFilters = () => {
+                const range = getMonthDateRange(getCurrentMonthString());
+                setAnalyticsStart(range.start);
+                setAnalyticsEnd(getLocalDateString());
+                setAnalyticsCatFilter('all');
+                setAnalyticsOwnerFilter('all');
+                setAnalyticsKeyword('');
+            };
+
+            const dailyQuerySummary = useMemo(() => {
+                if (!hasDailyQuery) return '';
+                return [
+                    formatQueryDateSummary(dailyQuery.start, dailyQuery.end),
+                    dailyQuery.item !== 'all' ? dailyQuery.item : '',
+                    dailyQuery.owner !== 'all' ? dailyQuery.owner : '',
+                    dailyQuery.note.trim() ? `備註：${dailyQuery.note.trim()}` : ''
+                ].filter(Boolean).join('｜');
+            }, [dailyQuery, hasDailyQuery]);
+
+            const projectQuerySummary = useMemo(() => {
+                if (!hasProjectQuery) return '';
+                return [
+                    formatQueryDateSummary(projectQuery.start, projectQuery.end),
+                    projectQuery.category !== 'all' ? `專案：${projectQuery.category}` : '',
+                    projectQuery.expenseItem !== 'all' ? `費用：${projectQuery.expenseItem}` : '',
+                    projectQuery.owner !== 'all' ? projectQuery.owner : '',
+                    projectQuery.text.trim() ? `文字：${projectQuery.text.trim()}` : '',
+                    selectedCalDate ? `日期：${selectedCalDate}` : ''
+                ].filter(Boolean).join('｜');
+            }, [projectQuery, selectedCalDate, hasProjectQuery]);
+
             // --- 計算與顯示處理 ---
             const availableDailyMonths = useMemo(() => generateRecentMonths(36), []);
 
             const displayDaily = useMemo(() => {
                 let filtered = [...dailyExpenses];
-                if (dailyMonthFilter !== 'all') filtered = filtered.filter(d => (d.date || '').startsWith(dailyMonthFilter));
+                if (hasDailyQuery) {
+                    if (dailyQuery.start) filtered = filtered.filter(d => (d.date || '') >= dailyQuery.start);
+                    if (dailyQuery.end) filtered = filtered.filter(d => (d.date || '') <= dailyQuery.end);
+                    if (dailyQuery.item !== 'all') filtered = filtered.filter(d => d.item === dailyQuery.item);
+                    if (dailyQuery.owner !== 'all') filtered = filtered.filter(d => normalizeSearchText(d.owner) === normalizeSearchText(dailyQuery.owner));
+                    if (dailyQuery.note.trim()) filtered = filtered.filter(d => containsSearchText(d.desc, dailyQuery.note));
+                } else if (dailyMonthFilter !== 'all') {
+                    filtered = filtered.filter(d => (d.date || '').startsWith(dailyMonthFilter));
+                }
                 filtered.sort((a, b) => {
                     const dateA = a.date || ''; const dateB = b.date || '';
                     return dailySort === 'desc' ? dateB.localeCompare(dateA) : dateA.localeCompare(dateB);
                 });
                 return filtered;
-            }, [dailyExpenses, dailyMonthFilter, dailySort]);
+            }, [dailyExpenses, dailyMonthFilter, dailySort, dailyQuery, hasDailyQuery]);
 
             const dailyFilteredTotal = useMemo(() => {
                 return displayDaily.reduce((sum, d) => sum + (parseFloat(d.amount) || 0), 0);
@@ -1575,8 +1718,10 @@
             const displayProjects = useMemo(() => {
                 let filtered = projects.filter(t => projectSubTab === 'active' ? !t.completed : t.completed);
 
-                if (projectYearFilter !== 'all' || projectMonthFilter !== 'all') {
-                    filtered = filtered.filter(t => projectMatchesYearMonth(t, projectYearFilter, projectMonthFilter));
+                if (projectQuery.start || projectQuery.end) {
+                    const start = projectQuery.start || '0000-01-01';
+                    const end = projectQuery.end || '9999-12-31';
+                    filtered = filtered.filter(t => projectOverlapsDateRange(t, start, end));
                 }
 
                 if (selectedCalDate) {
@@ -1586,29 +1731,16 @@
                     });
                 }
 
-                const keyword = projectKeyword.trim().toLowerCase();
+                if (projectQuery.category !== 'all') filtered = filtered.filter(t => t.category === projectQuery.category);
+                if (projectQuery.owner !== 'all') filtered = filtered.filter(t => (t.owners || []).includes(projectQuery.owner));
+                if (projectQuery.expenseItem !== 'all') filtered = filtered.filter(t => (t.expenses || []).some(e => e.item === projectQuery.expenseItem));
+
+                const keyword = projectQuery.text.trim();
                 if (keyword) {
                     filtered = filtered.filter(t => {
-                        const ownersText = (t.owners || []).join(' ');
-                        const linksText = (t.links || []).map(l => `${l.label || ''} ${l.url || ''}`).join(' ');
-                        const checklistText = (t.checklist || []).map(item => {
-                            const itemLinksText = (item.links || []).map(l => `${l.label || ''} ${l.url || ''}`).join(' ');
-                            const itemImagesText = (item.images || []).join(' ');
-                            return `${item.text || ''} ${itemLinksText} ${itemImagesText}`;
-                        }).join(' ');
-                        const expenseText = (t.expenses || []).map(e => `${e.date || ''} ${e.amount || ''} ${e.item || ''} ${e.desc || ''}`).join(' ');
-                        const searchableText = [
-                            t.text,
-                            t.category,
-                            ownersText,
-                            t.note,
-                            t.startDate,
-                            t.endDate,
-                            linksText,
-                            checklistText,
-                            expenseText
-                        ].filter(Boolean).join(' ').toLowerCase();
-                        return searchableText.includes(keyword);
+                        const expenseNotes = (t.expenses || []).map(e => e.desc || '').join(' ');
+                        const searchableText = [t.text, t.note, expenseNotes].filter(Boolean).join(' ');
+                        return containsSearchText(searchableText, keyword);
                     });
                 }
 
@@ -1617,7 +1749,7 @@
                     return projectSort === 'desc' ? dateB.localeCompare(dateA) : dateA.localeCompare(dateB);
                 });
                 return filtered;
-            }, [projects, projectSubTab, projectSort, selectedCalDate, projectKeyword, projectYearFilter, projectMonthFilter]);
+            }, [projects, projectSubTab, projectSort, selectedCalDate, projectQuery]);
             
             const calDays = useMemo(() => {
                 const year = currentCalMonth.getFullYear();
@@ -1636,13 +1768,16 @@
             }, [currentCalMonth, projects]);
 
             const analyticsData = useMemo(() => {
-                const ownerMap = {}; let totalExpense = 0; const trendMap = {}; const catMap = {};
+                const ownerMap = {}; let totalExpense = 0; const trendMap = {}; const catMap = {}; const rows = [];
+                const keyword = analyticsKeyword.trim();
+                const matchesAnalyticsKeyword = (source) => !keyword || containsSearchText(source, keyword);
                 
                 analyticsDailyExpenses.forEach(d => {
                     if (analyticsStart && d.date < analyticsStart) return;
                     if (analyticsEnd && d.date > analyticsEnd) return;
                     if (analyticsCatFilter !== 'all' && d.item !== analyticsCatFilter) return;
-                    if (analyticsOwnerFilter !== 'all' && d.owner !== analyticsOwnerFilter) return;
+                    if (analyticsOwnerFilter !== 'all' && normalizeSearchText(d.owner) !== normalizeSearchText(analyticsOwnerFilter)) return;
+                    if (!matchesAnalyticsKeyword(d.desc || '')) return;
 
                     const amt = parseFloat(d.amount) || 0; 
                     totalExpense += amt;
@@ -1650,17 +1785,18 @@
                     catMap[d.item] = (catMap[d.item] || 0) + amt;
                     const monthKey = d.date ? d.date.substring(0, 7) : 'Unknown';
                     trendMap[monthKey] = (trendMap[monthKey] || 0) + amt;
+                    rows.push({ source: '日常', date: d.date || '', title: d.desc || '無備註', item: d.item || '', owner: d.owner || '', amount: amt, projectName: '' });
                 });
                 
                 projects.forEach(t => {
                     const currentOwners = t.owners && t.owners.length > 0 ? t.owners : (t.owner ? [t.owner] : []);
-                    
                     if (analyticsOwnerFilter !== 'all' && !currentOwners.includes(analyticsOwnerFilter)) return;
 
                     (t.expenses || []).forEach(e => {
                         if (analyticsStart && e.date < analyticsStart) return;
                         if (analyticsEnd && e.date > analyticsEnd) return;
                         if (analyticsCatFilter !== 'all' && e.item !== analyticsCatFilter) return;
+                        if (!matchesAnalyticsKeyword([t.text, t.note, e.desc].filter(Boolean).join(' '))) return;
                         
                         const amt = parseFloat(e.amount) || 0;
                         const splitAmount = currentOwners.length > 0 ? amt / currentOwners.length : amt;
@@ -1676,11 +1812,15 @@
                         } else {
                             currentOwners.forEach(o => { ownerMap[o] = (ownerMap[o] || 0) + splitAmount; });
                         }
+
+                        rows.push({ source: '專案', date: e.date || '', title: e.desc || '無費用備註', item: e.item || '', owner: currentOwners.join('、'), amount: targetAmount, projectName: t.text || '' });
                     });
                 });
+
+                const sortedRows = rows.sort((a, b) => analyticsListSort === 'desc' ? (b.date || '').localeCompare(a.date || '') : (a.date || '').localeCompare(b.date || ''));
                 
-                return { sortedOwners: Object.entries(ownerMap).sort((a,b)=>b[1]-a[1]), totalExpense, trendKeys: Object.keys(trendMap).sort(), trendMap, catMap };
-            }, [analyticsDailyExpenses, projects, analyticsStart, analyticsEnd, analyticsCatFilter, analyticsOwnerFilter]);
+                return { sortedOwners: Object.entries(ownerMap).sort((a,b)=>b[1]-a[1]), totalExpense, trendKeys: Object.keys(trendMap).sort(), trendMap, catMap, rows: sortedRows };
+            }, [analyticsDailyExpenses, projects, analyticsStart, analyticsEnd, analyticsCatFilter, analyticsOwnerFilter, analyticsKeyword, analyticsListSort]);
 
             useEffect(() => {
                 if (activeTab !== 'analytics') return;
@@ -1870,12 +2010,17 @@
                             </h3>
                             <div className="flex flex-col items-end gap-2">
                                 <div className="flex gap-2">
-                                    <select value={dailyMonthFilter} onChange={e=>setDailyMonthFilter(e.target.value)} className="!py-1.5 !px-3 !text-sm !rounded-xl !bg-white shadow-sm border-none font-bold">
-                                        <option value="all">所有月份（讀全部）</option>
-                                        {availableDailyMonths.map(m => <option key={m} value={m}>{m}</option>)}
-                                    </select>
+                                    {!hasDailyQuery && (
+                                        <select value={dailyMonthFilter} onChange={e=>setDailyMonthFilter(e.target.value)} className="!py-1.5 !px-3 !text-sm !rounded-xl !bg-white shadow-sm border-none font-bold">
+                                            <option value="all">所有月份（讀全部）</option>
+                                            {availableDailyMonths.map(m => <option key={m} value={m}>{m}</option>)}
+                                        </select>
+                                    )}
+                                    <button onClick={openDailyQueryPanel} className={`bubble-btn btn-outline !p-1.5 !rounded-xl !border-none shadow-sm bg-white ${hasDailyQuery ? 'text-[var(--text-blue)] bg-[var(--pastel-blue)]/30' : ''}`} title="日常查詢">
+                                        <Icon name="search" size={18} />
+                                    </button>
                                     <button onClick={()=>setDailySort(prev => prev === 'desc' ? 'asc' : 'desc')} className="bubble-btn btn-outline !p-1.5 !rounded-xl !border-none shadow-sm bg-white" title={dailySort === 'desc' ? '改為舊到新' : '改為新到舊'}>
-                                        <Icon name={dailySort === 'desc' ? "sort-desc" : "sort-asc"} size={18} />
+                                        <Icon name={dailySort === 'desc' ? "arrow-down-wide-narrow" : "arrow-up-wide-narrow"} size={18} />
                                     </button>
                                 </div>
                                 <span className="bg-[var(--pastel-yellow)] text-[var(--text-yellow)] px-3 py-1.5 rounded-full text-sm font-black shadow-sm">
@@ -1883,10 +2028,16 @@
                                 </span>
                             </div>
                         </div>
+                        {hasDailyQuery && (
+                            <div className="mb-3 mx-2 flex items-center justify-between gap-2 bg-[var(--pastel-blue)]/35 text-[var(--text-blue)] px-3 py-2 rounded-[16px] text-[12px] font-black">
+                                <span className="truncate">查詢：{dailyQuerySummary || '已套用'}</span>
+                                <button onClick={clearDailyQuery} className="shrink-0 bg-white/80 rounded-full p-1"><Icon name="x" size={14}/></button>
+                            </div>
+                        )}
 
                         <div className="space-y-3">
                             {isDailyLoading && <p className="font-bold text-[var(--bubble-text)]/40 p-5 text-center flex items-center justify-center gap-2"><Icon name="loader" size={16} className="animate-spin" /> 讀取中...</p>}
-                            {!isDailyLoading && displayDaily.length === 0 && <p className="font-bold text-[var(--bubble-text)]/40 p-5 text-center">這個月份還沒有花費喔！</p>}
+                            {!isDailyLoading && displayDaily.length === 0 && <p className="font-bold text-[var(--bubble-text)]/40 p-5 text-center">{hasDailyQuery ? '找不到符合查詢條件的日常紀錄' : '這個月份還沒有花費喔！'}</p>}
                             {!isDailyLoading && displayDaily.map(d => (
                                 <div key={d.id} className="p-4 flex justify-between items-center bg-white rounded-[20px] shadow-sm hover:shadow-md transition-shadow group">
                                     <div className="flex items-center gap-4">
@@ -1972,50 +2123,23 @@
                         </button>
                     </div>
 
-                    <div className="bubble-card bg-white p-3 mx-2">
-                        <div className="flex items-center gap-2">
-                            <Icon name="search" size={18} className="text-[var(--bubble-text)]/40" />
-                            <input
-                                type="text"
-                                value={projectKeyword}
-                                onChange={e=>setProjectKeyword(e.target.value)}
-                                placeholder="搜尋專案名稱、類別、成員、備註、費用..."
-                                className="flex-grow min-w-0 !max-w-full !py-2 !px-3 !text-sm"
-                            />
-                            {projectKeyword && (
-                                <button onClick={()=>setProjectKeyword('')} className="bg-gray-100 text-gray-500 p-2 rounded-xl transition-all hover:bg-gray-200" title="清除搜尋"><Icon name="x" size={16}/></button>
-                            )}
-                        </div>
-                        <div className="grid grid-cols-[1fr_1fr_auto] gap-2 mt-3">
-                            <select value={projectYearFilter} onChange={e=>handleProjectYearChange(e.target.value)} className="w-full min-w-0 !max-w-full !py-2 !px-3 !text-sm">
-                                <option value="all">年份</option>
-                                {availableProjectYears.map(y => <option key={y} value={String(y)}>{y}</option>)}
-                            </select>
-                            <select value={projectMonthFilter} onChange={e=>handleProjectMonthChange(e.target.value)} className="w-full min-w-0 !max-w-full !py-2 !px-3 !text-sm">
-                                <option value="all">月份</option>
-                                {Array.from({ length: 12 }, (_, i) => {
-                                    const mm = String(i + 1).padStart(2, '0');
-                                    return <option key={mm} value={mm}>{i + 1}月</option>;
-                                })}
-                            </select>
-                            <button
-                                onClick={clearProjectFilters}
-                                disabled={!hasProjectFilters}
-                                className="bubble-btn btn-outline bg-white !p-3 shadow-sm border-none h-full"
-                                title="清除篩選"
-                            >
-                                <Icon name="rotate-ccw" size={18} />
+                    <div className="mx-2 space-y-2">
+                        <div className="flex justify-between items-center gap-2">
+                            {hasProjectQuery ? (
+                                <div className="flex-grow min-w-0 bg-[var(--pastel-mint)]/35 text-[var(--text-mint)] px-3 py-2 rounded-[16px] text-[12px] font-black flex items-center justify-between gap-2">
+                                    <span className="truncate">查詢：{projectQuerySummary || '已套用'}</span>
+                                    <button onClick={clearProjectQuery} className="shrink-0 bg-white/80 rounded-full p-1"><Icon name="x" size={14}/></button>
+                                </div>
+                            ) : <div className="flex-grow"></div>}
+                            <button onClick={openProjectQueryPanel} className={`bubble-btn btn-outline bg-white !p-3 shadow-sm border-none ${hasProjectQuery ? 'text-[var(--text-mint)] bg-[var(--pastel-mint)]/30' : ''}`} title="專案查詢">
+                                <Icon name="search" size={20} />
                             </button>
                         </div>
-                        {hasProjectFilters && (
-                            <div className="mt-2 px-2 text-[12px] font-bold text-[var(--bubble-text)]/45">
-                                篩選結果：{displayProjects.length} 個專案
-                            </div>
-                        )}
+                        {hasProjectQuery && <div className="px-2 text-[12px] font-bold text-[var(--bubble-text)]/45">篩選結果：{displayProjects.length} 個專案</div>}
                     </div>
 
                     <div className="space-y-4">
-                        {displayProjects.length === 0 && <p className="text-center font-bold text-[var(--bubble-text)]/40 py-10">{hasProjectFilters ? '找不到符合篩選的專案' : '尚無專案'}</p>}
+                        {displayProjects.length === 0 && <p className="text-center font-bold text-[var(--bubble-text)]/40 py-10">{hasProjectQuery ? '找不到符合查詢條件的專案' : '尚無專案'}</p>}
                         {displayProjects.map(t => {
                             const isExpanded = expandedProject[t.id];
                             const total = calculateProjectTotal(t);
@@ -2141,27 +2265,44 @@
                         <div className="bg-[var(--pastel-yellow)] p-2 rounded-2xl"><Icon name="pie-chart" size={24} className="text-[var(--text-yellow)]" /></div>
                         <h1 className="text-2xl font-black tracking-tight">統計分析</h1>
                     </div>
-                    
-                    {/* 篩選區間與條件設定 */}
                     <div className="bubble-card p-5 bg-white">
-                        <h3 className="font-bold text-sm text-[var(--bubble-text)]/60 mb-3">資料篩選設定</h3>
-                        <div className="flex items-center gap-1">
-                            <input type="date" value={analyticsStart} onChange={e=>setAnalyticsStart(e.target.value)} className="flex-1 min-w-0 !max-w-full !bg-white !px-1 sm:!px-1.5 !py-2 !text-[11px] sm:text-sm text-center" />
-                            <span className="font-black text-gray-300 shrink-0 mx-0.5">→</span>
-                            <input type="date" value={analyticsEnd} onChange={e=>setAnalyticsEnd(e.target.value)} className="flex-1 min-w-0 !max-w-full !bg-white !px-1 sm:!px-1.5 !py-2 !text-[11px] sm:text-sm text-center" />
-                        </div>
-                        {isAnalyticsDateInvalid && <div className="text-[var(--text-orange)] text-xs font-bold mt-2">截止日期不能早於起始日期！</div>}
-                        
-                        <div className="flex items-center gap-2 mt-3">
-                            <select value={analyticsCatFilter} onChange={e=>setAnalyticsCatFilter(e.target.value)} className="w-full min-w-0 !max-w-full !py-2 !px-3 !text-sm">
-                                <option value="all">所有費用分類</option>
-                                {expenseItems.map(i => <option key={i.id} value={i.name}>{i.name}</option>)}
-                            </select>
-                            <select value={analyticsOwnerFilter} onChange={e=>setAnalyticsOwnerFilter(e.target.value)} className="w-full min-w-0 !max-w-full !py-2 !px-3 !text-sm">
-                                <option value="all">所有成員</option>
-                                {dailyOwnerOptions.map(o => <option key={o} value={o}>{o}</option>)}
-                            </select>
-                        </div>
+                        <button onClick={()=>setIsAnalyticsFilterOpen(prev => !prev)} className="w-full flex justify-between items-center mb-3">
+                            <h3 className="font-bold text-sm text-[var(--bubble-text)]/60">資料篩選設定</h3>
+                            <Icon name={isAnalyticsFilterOpen ? "chevron-up" : "chevron-down"} size={18} className="text-[var(--bubble-text)]/40" />
+                        </button>
+                        {!isAnalyticsFilterOpen && (
+                            <div className="text-[12px] font-bold text-[var(--bubble-text)]/45 truncate">
+                                {[formatQueryDateSummary(analyticsStart, analyticsEnd), analyticsCatFilter !== 'all' ? analyticsCatFilter : '', analyticsOwnerFilter !== 'all' ? analyticsOwnerFilter : '', analyticsKeyword ? `關鍵字：${analyticsKeyword}` : ''].filter(Boolean).join('｜') || '未設定篩選'}
+                            </div>
+                        )}
+                        {isAnalyticsFilterOpen && (
+                            <div className="space-y-3">
+                                <div className="grid grid-cols-3 gap-2">
+                                    <button onClick={()=>applyAnalyticsDateShortcut('year')} className="bubble-btn btn-outline !py-1.5 !text-xs !rounded-xl">今年</button>
+                                    <button onClick={()=>applyAnalyticsDateShortcut('month')} className="bubble-btn btn-outline !py-1.5 !text-xs !rounded-xl">本月</button>
+                                    <button onClick={()=>applyAnalyticsDateShortcut('lastMonth')} className="bubble-btn btn-outline !py-1.5 !text-xs !rounded-xl">上月</button>
+                                </div>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <input type="date" value={analyticsStart} onChange={e=>setAnalyticsStart(e.target.value)} className="w-full min-w-0 !max-w-full !bg-white !px-2 !py-2 !text-[12px] sm:text-sm text-center" />
+                                    <input type="date" value={analyticsEnd} onChange={e=>setAnalyticsEnd(e.target.value)} className="w-full min-w-0 !max-w-full !bg-white !px-2 !py-2 !text-[12px] sm:text-sm text-center" />
+                                </div>
+                                {isAnalyticsDateInvalid && <div className="text-[var(--text-orange)] text-xs font-bold">截止日期不能早於起始日期！</div>}
+                                <div className="grid grid-cols-2 gap-2">
+                                    <select value={analyticsCatFilter} onChange={e=>setAnalyticsCatFilter(e.target.value)} className="w-full min-w-0 !max-w-full !py-2 !px-3 !text-sm">
+                                        <option value="all">費用分類</option>
+                                        {expenseItems.map(i => <option key={i.id} value={i.name}>{i.name}</option>)}
+                                    </select>
+                                    <select value={analyticsOwnerFilter} onChange={e=>setAnalyticsOwnerFilter(e.target.value)} className="w-full min-w-0 !max-w-full !py-2 !px-3 !text-sm">
+                                        <option value="all">成員</option>
+                                        {dailyOwnerOptions.map(o => <option key={o} value={o}>{o}</option>)}
+                                    </select>
+                                </div>
+                                <input type="text" value={analyticsKeyword} onChange={e=>setAnalyticsKeyword(e.target.value)} placeholder="關鍵字：備註、專案名稱..." className="w-full min-w-0 !max-w-full !py-2 !px-3 !text-sm" />
+                                <div className="flex justify-end">
+                                    <button onClick={clearAnalyticsFilters} className="bubble-btn btn-outline !py-1.5 !px-4 !text-xs"><Icon name="rotate-ccw" size={14}/> 重設</button>
+                                </div>
+                            </div>
+                        )}
                     </div>
 
                     {isAnalyticsLoading && (
@@ -2209,7 +2350,32 @@
                             })}
                         </div>
                     </div>
-                </div>
+
+
+                    <div className="bubble-card p-6 bg-white">
+                        <div className="flex justify-between items-center mb-5">
+                            <h3 className="text-xl font-black flex items-center gap-2"><Icon name="list" size={20}/> 篩選結果清單</h3>
+                            <button onClick={()=>setAnalyticsListSort(prev => prev === 'desc' ? 'asc' : 'desc')} className="bubble-btn btn-outline !p-2 !rounded-xl !border-none shadow-sm bg-white" title={analyticsListSort === 'desc' ? '改為舊到新' : '改為新到舊'}>
+                                <Icon name={analyticsListSort === 'desc' ? "arrow-down-wide-narrow" : "arrow-up-wide-narrow"} size={18} />
+                            </button>
+                        </div>
+                        <div className="space-y-3">
+                            {analyticsData.rows.length === 0 && <div className="text-center font-bold text-gray-400 py-4">無符合條件資料</div>}
+                            {analyticsData.rows.map((row, idx) => (
+                                <div key={`${row.source}-${row.date}-${idx}`} className="p-3 rounded-[18px] bg-[var(--bubble-bg)]/60 flex justify-between gap-3 items-start">
+                                    <div className="min-w-0">
+                                        <div className="flex items-center gap-2 mb-1">
+                                            <span className={`tag shadow-sm ${row.source === '日常' ? 'bg-[var(--pastel-blue)] text-[var(--text-blue)]' : 'bg-[var(--pastel-mint)] text-[var(--text-mint)]'}`}>{row.source}</span>
+                                            <span className="font-black text-[13px] text-[var(--bubble-text)]/60">{row.date}</span>
+                                        </div>
+                                        <div className="font-black text-[15px] truncate text-[var(--bubble-text)]">{row.source === '專案' && row.projectName ? `${row.projectName}｜` : ''}{row.title}</div>
+                                        <div className="font-bold text-[12px] text-[var(--bubble-text)]/45 mt-0.5">{row.item}　{row.owner}</div>
+                                    </div>
+                                    <div className="font-black text-[16px] text-[var(--bubble-text)] shrink-0">${Number(row.amount || 0).toLocaleString()}</div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>                </div>
             );
 
             // 修改 Settings 裡排序的賦值方式，避免刪除又新增後出現同一個 order 的問題
@@ -2243,12 +2409,49 @@
                 </div>
             );
 
+            if (!user) {
+                return (
+                    <div className="min-h-screen flex items-center justify-center px-6 py-10 bg-[var(--bubble-bg)]">
+                        <div className="bubble-card bg-white p-8 max-w-sm w-full text-center shadow-2xl">
+                            <div className="w-16 h-16 mx-auto mb-5 rounded-[24px] bg-[var(--pastel-blue)] flex items-center justify-center">
+                                <Icon name="sparkles" size={30} className="text-[var(--text-blue)]" />
+                            </div>
+                            <h1 className="text-2xl font-black mb-2 text-[var(--bubble-text)]">T&E LifeLog</h1>
+                            <p className="text-sm font-bold text-[var(--bubble-text)]/50 mb-6">請使用 Google 帳號登入</p>
+                            <button onClick={signInWithGoogle} className="bubble-btn btn-primary w-full py-3 justify-center">
+                                <Icon name="log-in" size={18}/> 使用 Google 登入
+                            </button>
+                        </div>
+                    </div>
+                );
+            }
+
+            if (!isAllowedEmail(user.email)) {
+                return (
+                    <div className="min-h-screen flex items-center justify-center px-6 py-10 bg-[var(--bubble-bg)]">
+                        <div className="bubble-card bg-white p-8 max-w-sm w-full text-center shadow-2xl">
+                            <div className="w-16 h-16 mx-auto mb-5 rounded-[24px] bg-[var(--pastel-orange)]/40 flex items-center justify-center">
+                                <Icon name="shield-alert" size={30} className="text-[var(--text-orange)]" />
+                            </div>
+                            <h1 className="text-2xl font-black mb-2 text-[var(--bubble-text)]">無法使用此服務</h1>
+                            <p className="text-sm font-bold text-[var(--bubble-text)]/50 mb-6">目前登入帳號未授權。</p>
+                            <button onClick={signOutUser} className="bubble-btn btn-outline w-full py-3 justify-center">
+                                <Icon name="log-out" size={18}/> 登出
+                            </button>
+                        </div>
+                    </div>
+                );
+            }
+
             return (
                 <div className="min-h-screen pb-32 pt-8 px-4 sm:px-6">
                     <header className="mb-6 px-2 text-center">
-                        <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-emerald-950 drop-shadow-sm flex justify-center items-center gap-3">
-                            <Icon name="sparkles" size={28} className="text-amber-500" /> T&E LifeLog
-                        </h1>
+                        <div className="flex justify-center items-center gap-3">
+                            <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-emerald-950 drop-shadow-sm flex justify-center items-center gap-3">
+                                <Icon name="sparkles" size={28} className="text-amber-500" /> T&E LifeLog
+                            </h1>
+                            <button onClick={signOutUser} className="p-1.5 rounded-full bg-white/70 text-gray-400 shadow-sm" title="登出"><Icon name="log-out" size={16}/></button>
+                        </div>
                     </header>
                     <main>
                         {activeTab === 'daily' && renderDailyView()}
@@ -2298,6 +2501,85 @@
                                 </div>
                                 <div className="font-black text-lg text-[var(--bubble-text)]">資料載入中</div>
                                 <div className="font-bold text-sm text-[var(--bubble-text)]/50 mt-1">正在同步本月記帳與專案資料...</div>
+                            </div>
+                        </div>
+                    )}
+
+
+                    {isDailyQueryOpen && (
+                        <div className="modal-overlay items-end sm:items-center" onClick={()=>setIsDailyQueryOpen(false)}>
+                            <div className="bubble-card bg-white p-5 w-full max-w-md modal-panel animate-in slide-in-from-bottom-4 sm:zoom-in-95 duration-200 mx-4 mb-4 sm:mb-0" onClick={e=>e.stopPropagation()}>
+                                <div className="flex justify-between items-center mb-4">
+                                    <h3 className="font-black text-xl text-[var(--text-blue)] flex items-center gap-2"><Icon name="search" size={20}/> 日常查詢</h3>
+                                    <button onClick={()=>setIsDailyQueryOpen(false)} className="p-2 bg-gray-50 rounded-full text-gray-500"><Icon name="x" size={18}/></button>
+                                </div>
+                                <div className="space-y-3">
+                                    <div className="grid grid-cols-3 gap-2">
+                                        <button onClick={()=>applyDailyDateShortcut('year')} className="bubble-btn btn-outline !py-1.5 !text-xs !rounded-xl">今年</button>
+                                        <button onClick={()=>applyDailyDateShortcut('month')} className="bubble-btn btn-outline !py-1.5 !text-xs !rounded-xl">本月</button>
+                                        <button onClick={()=>applyDailyDateShortcut('lastMonth')} className="bubble-btn btn-outline !py-1.5 !text-xs !rounded-xl">上月</button>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <input type="date" value={dailyQueryDraft.start} onChange={e=>setDailyQueryDraft({...dailyQueryDraft, start: e.target.value})} className="w-full min-w-0 !max-w-full !text-[12px] text-center" />
+                                        <input type="date" value={dailyQueryDraft.end} onChange={e=>setDailyQueryDraft({...dailyQueryDraft, end: e.target.value})} className="w-full min-w-0 !max-w-full !text-[12px] text-center" />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <select value={dailyQueryDraft.item} onChange={e=>setDailyQueryDraft({...dailyQueryDraft, item: e.target.value})} className="w-full min-w-0 !max-w-full !text-sm">
+                                            <option value="all">分類</option>
+                                            {expenseItems.map(i => <option key={i.id} value={i.name}>{i.name}</option>)}
+                                        </select>
+                                        <select value={dailyQueryDraft.owner} onChange={e=>setDailyQueryDraft({...dailyQueryDraft, owner: e.target.value})} className="w-full min-w-0 !max-w-full !text-sm">
+                                            <option value="all">成員</option>
+                                            {dailyOwnerOptions.map(o => <option key={o} value={o}>{o}</option>)}
+                                        </select>
+                                    </div>
+                                    <input type="text" value={dailyQueryDraft.note} onChange={e=>setDailyQueryDraft({...dailyQueryDraft, note: e.target.value})} placeholder="搜尋備註..." className="w-full min-w-0 !max-w-full !text-sm" />
+                                    <div className="flex gap-3 pt-2">
+                                        <button onClick={clearDailyQuery} className="bubble-btn btn-outline flex-1 py-3">清除</button>
+                                        <button onClick={applyDailyQuery} className="bubble-btn btn-primary flex-1 py-3">套用</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {isProjectQueryOpen && (
+                        <div className="modal-overlay items-end sm:items-center" onClick={()=>setIsProjectQueryOpen(false)}>
+                            <div className="bubble-card bg-white p-5 w-full max-w-md modal-panel animate-in slide-in-from-bottom-4 sm:zoom-in-95 duration-200 mx-4 mb-4 sm:mb-0" onClick={e=>e.stopPropagation()}>
+                                <div className="flex justify-between items-center mb-4">
+                                    <h3 className="font-black text-xl text-[var(--text-mint)] flex items-center gap-2"><Icon name="search" size={20}/> 專案查詢</h3>
+                                    <button onClick={()=>setIsProjectQueryOpen(false)} className="p-2 bg-gray-50 rounded-full text-gray-500"><Icon name="x" size={18}/></button>
+                                </div>
+                                <div className="space-y-3">
+                                    <input type="text" value={projectQueryDraft.text} onChange={e=>setProjectQueryDraft({...projectQueryDraft, text: e.target.value})} placeholder="搜尋專案名稱、專案備註、費用備註..." className="w-full min-w-0 !max-w-full !text-sm" />
+                                    <div className="grid grid-cols-3 gap-2">
+                                        <button onClick={()=>applyProjectDateShortcut('year')} className="bubble-btn btn-outline !py-1.5 !text-xs !rounded-xl">今年</button>
+                                        <button onClick={()=>applyProjectDateShortcut('month')} className="bubble-btn btn-outline !py-1.5 !text-xs !rounded-xl">本月</button>
+                                        <button onClick={()=>applyProjectDateShortcut('lastMonth')} className="bubble-btn btn-outline !py-1.5 !text-xs !rounded-xl">上月</button>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <input type="date" value={projectQueryDraft.start} onChange={e=>setProjectQueryDraft({...projectQueryDraft, start: e.target.value})} className="w-full min-w-0 !max-w-full !text-[12px] text-center" />
+                                        <input type="date" value={projectQueryDraft.end} onChange={e=>setProjectQueryDraft({...projectQueryDraft, end: e.target.value})} className="w-full min-w-0 !max-w-full !text-[12px] text-center" />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <select value={projectQueryDraft.category} onChange={e=>setProjectQueryDraft({...projectQueryDraft, category: e.target.value})} className="w-full min-w-0 !max-w-full !text-sm">
+                                            <option value="all">專案分類</option>
+                                            {categories.map(i => <option key={i.id} value={i.name}>{i.name}</option>)}
+                                        </select>
+                                        <select value={projectQueryDraft.expenseItem} onChange={e=>setProjectQueryDraft({...projectQueryDraft, expenseItem: e.target.value})} className="w-full min-w-0 !max-w-full !text-sm">
+                                            <option value="all">費用分類</option>
+                                            {expenseItems.map(i => <option key={i.id} value={i.name}>{i.name}</option>)}
+                                        </select>
+                                    </div>
+                                    <select value={projectQueryDraft.owner} onChange={e=>setProjectQueryDraft({...projectQueryDraft, owner: e.target.value})} className="w-full min-w-0 !max-w-full !text-sm">
+                                        <option value="all">成員</option>
+                                        {members.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}
+                                    </select>
+                                    <div className="flex gap-3 pt-2">
+                                        <button onClick={clearProjectQuery} className="bubble-btn btn-outline flex-1 py-3">清除</button>
+                                        <button onClick={applyProjectQuery} className="bubble-btn btn-mint flex-1 py-3">套用</button>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     )}
