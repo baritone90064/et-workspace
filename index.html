@@ -292,6 +292,8 @@
         const googleProvider = new firebase.auth.GoogleAuthProvider();
         googleProvider.setCustomParameters({ prompt: 'select_account' });
         const ALLOWED_EMAILS = ['baritone90064@gmail.com', 'terry4410@gmail.com'];
+        const AUTH_POPUP_TIMEOUT_MS = 30000;
+        const DATA_LOADING_TIMEOUT_MS = 15000;
 
         const { useState, useEffect, useMemo, useRef } = React;
 
@@ -619,6 +621,21 @@
 
             const isAllowedEmail = (email) => ALLOWED_EMAILS.map(normalizeEmail).includes(normalizeEmail(email));
 
+            const createTimeoutError = (code, message) => {
+                const error = new Error(message);
+                error.code = code;
+                return error;
+            };
+
+            const withTimeout = (promise, timeoutMs, code, message) => {
+                let timerId;
+                const timeoutPromise = new Promise((_, reject) => {
+                    timerId = window.setTimeout(() => reject(createTimeoutError(code, message)), timeoutMs);
+                });
+                return Promise.race([promise, timeoutPromise])
+                    .finally(() => window.clearTimeout(timerId));
+            };
+
             const getGoogleLoginErrorMessage = (err) => {
                 switch (err?.code) {
                     case 'auth/popup-blocked':
@@ -626,10 +643,16 @@
                     case 'auth/popup-closed-by-user':
                     case 'auth/cancelled-popup-request':
                         return 'Google 登入尚未完成，請重新登入。';
+                    case 'auth/popup-timeout':
+                        return 'Google 登入等待逾時。請關閉尚未完成的登入視窗後，再重新登入。';
                     case 'auth/unauthorized-domain':
                         return '目前網站網域尚未加入 Firebase 授權網域。';
                     case 'auth/network-request-failed':
                         return '網路連線異常，請確認網路後再試一次。';
+                    case 'auth/web-storage-unsupported':
+                        return '瀏覽器目前禁止儲存登入狀態，請允許 Cookie／網站資料後再試一次。';
+                    case 'auth/operation-not-supported-in-this-environment':
+                        return '目前瀏覽器環境不支援 Google 登入，請改用一般瀏覽器開啟。';
                     case 'auth/account-exists-with-different-credential':
                         return '此電子郵件已使用其他登入方式建立，請改用原本的登入方式。';
                     default:
@@ -639,24 +662,44 @@
 
             const signInWithGoogle = async () => {
                 if (isSigningIn) return;
+
                 setIsSigningIn(true);
                 setAuthError('');
 
                 try {
-                    await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
+                    // Persistence 失敗不應阻止登入；最多等 10 秒後繼續。
+                    try {
+                        await withTimeout(
+                            auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL),
+                            10000,
+                            'auth/persistence-timeout',
+                            '登入狀態保存設定逾時'
+                        );
+                    } catch (persistenceError) {
+                        console.warn('登入狀態保存設定失敗，改用瀏覽器預設值:', persistenceError);
+                    }
 
                     // 清除舊版留下的匿名登入狀態，避免被誤判為未授權帳號。
                     if (auth.currentUser?.isAnonymous) {
                         await auth.signOut();
                     }
 
-                    const result = await auth.signInWithPopup(googleProvider);
-                    const signedInUser = result?.user;
-                    if (signedInUser) {
-                        await signedInUser.reload().catch(() => {});
+                    // 不要在登入後呼叫 user.reload()。
+                    // result.user 已包含 Google 帳號 email；reload 在部分瀏覽器可能長時間不回應，
+                    // 會讓 finally 無法執行，按鈕永久停在「登入中...」。
+                    const result = await withTimeout(
+                        auth.signInWithPopup(googleProvider),
+                        AUTH_POPUP_TIMEOUT_MS,
+                        'auth/popup-timeout',
+                        'Google 登入等待逾時'
+                    );
+
+                    const signedInUser = result?.user || auth.currentUser;
+                    if (!signedInUser) {
+                        throw createTimeoutError('auth/no-current-user', 'Google 登入完成，但未取得使用者資料。');
                     }
 
-                    const email = getFirebaseUserEmail(auth.currentUser || signedInUser);
+                    const email = getFirebaseUserEmail(signedInUser);
                     if (!isAllowedEmail(email)) {
                         await auth.signOut();
                         setUser(null);
@@ -665,11 +708,22 @@
                         return;
                     }
 
-                    setUser(auth.currentUser || signedInUser);
+                    setUser(signedInUser);
+                    setIsInitialLoading(true);
                 } catch (err) {
                     console.error('Google 登入失敗:', err);
-                    setAuthError(getGoogleLoginErrorMessage(err));
-                    setIsInitialLoading(false);
+
+                    // 即使 popup Promise 逾時，只要 Firebase 已完成登入，仍交給 Auth 狀態繼續。
+                    const currentUser = auth.currentUser;
+                    const currentEmail = getFirebaseUserEmail(currentUser);
+                    if (currentUser && isAllowedEmail(currentEmail)) {
+                        setUser(currentUser);
+                        setAuthError('');
+                        setIsInitialLoading(true);
+                    } else {
+                        setAuthError(getGoogleLoginErrorMessage(err));
+                        setIsInitialLoading(false);
+                    }
                 } finally {
                     setIsSigningIn(false);
                 }
@@ -691,44 +745,55 @@
                 auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL)
                     .catch(err => console.warn('登入狀態保存設定失敗:', err));
 
-                const unsubscribe = auth.onAuthStateChanged(async currentUser => {
+                const finishSignedOutState = () => {
                     if (!isMounted) return;
+                    setUser(null);
+                    setIsSigningIn(false);
+                    setIsInitialLoading(false);
+                };
 
-                    // 舊版匿名登入不再使用；偵測到時直接清除並回登入畫面。
-                    if (currentUser?.isAnonymous) {
-                        try { await auth.signOut(); }
-                        catch (err) { console.warn('清除舊匿名登入失敗:', err); }
-                        if (isMounted) {
-                            setUser(null);
-                            setIsInitialLoading(false);
-                        }
-                        return;
-                    }
+                const unsubscribe = auth.onAuthStateChanged(
+                    currentUser => {
+                        if (!isMounted) return;
 
-                    if (currentUser) {
-                        await currentUser.reload().catch(() => {});
-                        const refreshedUser = auth.currentUser || currentUser;
-                        const email = getFirebaseUserEmail(refreshedUser);
+                        // Auth observer 一有結果就解除登入按鈕狀態，避免 UI 永久卡住。
+                        setIsSigningIn(false);
 
-                        if (!isAllowedEmail(email)) {
-                            setAuthError('此 Google 帳號沒有權限使用 T&E LifeLog。');
-                            try { await auth.signOut(); }
-                            catch (err) { console.warn('未授權帳號自動登出失敗:', err); }
-                            if (isMounted) {
-                                setUser(null);
-                                setIsInitialLoading(false);
-                            }
+                        // 舊版匿名登入不再使用；偵測到時直接清除並回登入畫面。
+                        if (currentUser?.isAnonymous) {
+                            auth.signOut()
+                                .catch(err => console.warn('清除舊匿名登入失敗:', err))
+                                .finally(finishSignedOutState);
                             return;
                         }
 
-                        setAuthError('');
-                        setUser(refreshedUser);
-                        return;
-                    }
+                        if (currentUser) {
+                            // Firebase 傳入的 currentUser 已可直接取得 email，不需要再 reload()。
+                            const email = getFirebaseUserEmail(currentUser);
 
-                    setUser(null);
-                    setIsInitialLoading(false);
-                });
+                            if (!isAllowedEmail(email)) {
+                                setAuthError('此 Google 帳號沒有權限使用 T&E LifeLog。');
+                                setUser(null);
+                                setIsInitialLoading(false);
+                                auth.signOut().catch(err => console.warn('未授權帳號自動登出失敗:', err));
+                                return;
+                            }
+
+                            setAuthError('');
+                            setUser(currentUser);
+                            setIsInitialLoading(true);
+                            return;
+                        }
+
+                        finishSignedOutState();
+                    },
+                    err => {
+                        console.error('監聽登入狀態失敗:', err);
+                        if (!isMounted) return;
+                        setAuthError(getGoogleLoginErrorMessage(err));
+                        finishSignedOutState();
+                    }
+                );
 
                 return () => {
                     isMounted = false;
@@ -825,7 +890,21 @@
             }, [user, dailyMonthFilter, dailyQuery]);
 
             useEffect(() => {
-                if (user && isAllowedEmail(getFirebaseUserEmail(user)) && Object.values(loadedSources).every(Boolean)) setIsInitialLoading(false);
+                if (!user || !isAllowedEmail(getFirebaseUserEmail(user))) return;
+
+                if (Object.values(loadedSources).every(Boolean)) {
+                    setIsInitialLoading(false);
+                    return;
+                }
+
+                // Firestore 某個監聽若因網路或瀏覽器問題一直沒有回呼，
+                // 最多顯示載入畫面 15 秒，避免整個 App 永久被遮住。
+                const loadingTimer = window.setTimeout(() => {
+                    console.warn('資料載入等待逾時，先解除載入畫面:', loadedSources);
+                    setIsInitialLoading(false);
+                }, DATA_LOADING_TIMEOUT_MS);
+
+                return () => window.clearTimeout(loadingTimer);
             }, [user, loadedSources]);
 
             useEffect(() => {
