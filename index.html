@@ -475,6 +475,8 @@
 
         function App() {
             const [user, setUser] = useState(null);
+            const [authError, setAuthError] = useState('');
+            const [isSigningIn, setIsSigningIn] = useState(false);
             const [isInitialLoading, setIsInitialLoading] = useState(true);
             const [loadedSources, setLoadedSources] = useState({
                 daily: false,
@@ -606,41 +608,136 @@
                 saveDailyOwner(owner);
             };
 
-            const isAllowedEmail = (email) => ALLOWED_EMAILS.map(e => e.toLowerCase()).includes(String(email || '').toLowerCase());
+            const normalizeEmail = (email) => String(email || '').trim().toLowerCase();
+
+            const getFirebaseUserEmail = (firebaseUser) => {
+                if (!firebaseUser) return '';
+                if (firebaseUser.email) return normalizeEmail(firebaseUser.email);
+                const providerEmail = (firebaseUser.providerData || []).find(item => item && item.email)?.email;
+                return normalizeEmail(providerEmail);
+            };
+
+            const isAllowedEmail = (email) => ALLOWED_EMAILS.map(normalizeEmail).includes(normalizeEmail(email));
+
+            const getGoogleLoginErrorMessage = (err) => {
+                switch (err?.code) {
+                    case 'auth/popup-blocked':
+                        return 'Google 登入視窗被瀏覽器阻擋，請允許彈出視窗後再試一次。';
+                    case 'auth/popup-closed-by-user':
+                    case 'auth/cancelled-popup-request':
+                        return 'Google 登入尚未完成，請重新登入。';
+                    case 'auth/unauthorized-domain':
+                        return '目前網站網域尚未加入 Firebase 授權網域。';
+                    case 'auth/network-request-failed':
+                        return '網路連線異常，請確認網路後再試一次。';
+                    case 'auth/account-exists-with-different-credential':
+                        return '此電子郵件已使用其他登入方式建立，請改用原本的登入方式。';
+                    default:
+                        return err?.message || 'Google 登入失敗，請稍後再試。';
+                }
+            };
 
             const signInWithGoogle = async () => {
+                if (isSigningIn) return;
+                setIsSigningIn(true);
+                setAuthError('');
+
                 try {
                     await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
-                    await auth.signInWithRedirect(googleProvider);
+
+                    // 清除舊版留下的匿名登入狀態，避免被誤判為未授權帳號。
+                    if (auth.currentUser?.isAnonymous) {
+                        await auth.signOut();
+                    }
+
+                    const result = await auth.signInWithPopup(googleProvider);
+                    const signedInUser = result?.user;
+                    if (signedInUser) {
+                        await signedInUser.reload().catch(() => {});
+                    }
+
+                    const email = getFirebaseUserEmail(auth.currentUser || signedInUser);
+                    if (!isAllowedEmail(email)) {
+                        await auth.signOut();
+                        setUser(null);
+                        setAuthError('此 Google 帳號沒有權限使用 T&E LifeLog。');
+                        setIsInitialLoading(false);
+                        return;
+                    }
+
+                    setUser(auth.currentUser || signedInUser);
                 } catch (err) {
                     console.error('Google 登入失敗:', err);
-                    alert(`Google 登入失敗：${err.message || '請稍後再試'}`);
+                    setAuthError(getGoogleLoginErrorMessage(err));
+                    setIsInitialLoading(false);
+                } finally {
+                    setIsSigningIn(false);
                 }
             };
 
             const signOutUser = async () => {
-                try { await auth.signOut(); }
-                catch (err) {
+                try {
+                    setAuthError('');
+                    await auth.signOut();
+                } catch (err) {
                     console.error('登出失敗:', err);
                     alert(`登出失敗：${err.message || '請稍後再試'}`);
                 }
             };
 
             useEffect(() => {
-                auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(err => console.warn('登入狀態保存設定失敗:', err));
-                const unsubscribe = auth.onAuthStateChanged(currentUser => {
-                    setUser(currentUser);
-                    if (!currentUser) setIsInitialLoading(false);
-                });
-                auth.getRedirectResult().catch(err => {
-                    console.error('Google 登入返回處理失敗:', err);
+                let isMounted = true;
+
+                auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL)
+                    .catch(err => console.warn('登入狀態保存設定失敗:', err));
+
+                const unsubscribe = auth.onAuthStateChanged(async currentUser => {
+                    if (!isMounted) return;
+
+                    // 舊版匿名登入不再使用；偵測到時直接清除並回登入畫面。
+                    if (currentUser?.isAnonymous) {
+                        try { await auth.signOut(); }
+                        catch (err) { console.warn('清除舊匿名登入失敗:', err); }
+                        if (isMounted) {
+                            setUser(null);
+                            setIsInitialLoading(false);
+                        }
+                        return;
+                    }
+
+                    if (currentUser) {
+                        await currentUser.reload().catch(() => {});
+                        const refreshedUser = auth.currentUser || currentUser;
+                        const email = getFirebaseUserEmail(refreshedUser);
+
+                        if (!isAllowedEmail(email)) {
+                            setAuthError('此 Google 帳號沒有權限使用 T&E LifeLog。');
+                            try { await auth.signOut(); }
+                            catch (err) { console.warn('未授權帳號自動登出失敗:', err); }
+                            if (isMounted) {
+                                setUser(null);
+                                setIsInitialLoading(false);
+                            }
+                            return;
+                        }
+
+                        setAuthError('');
+                        setUser(refreshedUser);
+                        return;
+                    }
+
+                    setUser(null);
                     setIsInitialLoading(false);
                 });
-                return unsubscribe;
+
+                return () => {
+                    isMounted = false;
+                    unsubscribe();
+                };
             }, []);
 
             useEffect(() => {
-                if (!user || !isAllowedEmail(user.email)) return;
+                if (!user || !isAllowedEmail(getFirebaseUserEmail(user))) return;
                 setIsInitialLoading(true);
                 setLoadedSources({ daily: false, projects: false, categories: false, expenseItems: false, members: false });
 
@@ -695,7 +792,7 @@
             }, [user]);
 
             useEffect(() => {
-                if (!user || !isAllowedEmail(user.email)) return;
+                if (!user || !isAllowedEmail(getFirebaseUserEmail(user))) return;
                 const path = db.collection('artifacts').doc(appId).collection('public').doc('data');
                 let query = path.collection('dailyExpenses');
 
@@ -728,7 +825,7 @@
             }, [user, dailyMonthFilter, dailyQuery]);
 
             useEffect(() => {
-                if (user && isAllowedEmail(user.email) && Object.values(loadedSources).every(Boolean)) setIsInitialLoading(false);
+                if (user && isAllowedEmail(getFirebaseUserEmail(user)) && Object.values(loadedSources).every(Boolean)) setIsInitialLoading(false);
             }, [user, loadedSources]);
 
             useEffect(() => {
@@ -750,7 +847,7 @@
             }, [analyticsStart, analyticsEnd]);
 
             useEffect(() => {
-                if (!user || !isAllowedEmail(user.email) || activeTab !== 'analytics') return;
+                if (!user || !isAllowedEmail(getFirebaseUserEmail(user)) || activeTab !== 'analytics') return;
                 if (analyticsStart && analyticsEnd && analyticsEnd < analyticsStart) return;
 
                 const path = db.collection('artifacts').doc(appId).collection('public').doc('data');
@@ -2417,16 +2514,26 @@
                                 <Icon name="sparkles" size={30} className="text-[var(--text-blue)]" />
                             </div>
                             <h1 className="text-2xl font-black mb-2 text-[var(--bubble-text)]">T&E LifeLog</h1>
-                            <p className="text-sm font-bold text-[var(--bubble-text)]/50 mb-6">請使用 Google 帳號登入</p>
-                            <button onClick={signInWithGoogle} className="bubble-btn btn-primary w-full py-3 justify-center">
-                                <Icon name="log-in" size={18}/> 使用 Google 登入
+                            <p className="text-sm font-bold text-[var(--bubble-text)]/50 mb-4">請使用 Google 帳號登入</p>
+                            {authError && (
+                                <div className="mb-4 rounded-[18px] bg-red-50 border border-red-100 px-4 py-3 text-left text-[13px] font-bold text-red-700 leading-relaxed">
+                                    {authError}
+                                </div>
+                            )}
+                            <button
+                                onClick={signInWithGoogle}
+                                disabled={isSigningIn}
+                                className={`bubble-btn btn-primary w-full py-3 justify-center ${isSigningIn ? 'opacity-60 cursor-not-allowed' : ''}`}
+                            >
+                                <Icon name={isSigningIn ? "loader-circle" : "log-in"} size={18} className={isSigningIn ? "animate-spin" : ""}/>
+                                {isSigningIn ? '登入中...' : '使用 Google 登入'}
                             </button>
                         </div>
                     </div>
                 );
             }
 
-            if (!isAllowedEmail(user.email)) {
+            if (!isAllowedEmail(getFirebaseUserEmail(user))) {
                 return (
                     <div className="min-h-screen flex items-center justify-center px-6 py-10 bg-[var(--bubble-bg)]">
                         <div className="bubble-card bg-white p-8 max-w-sm w-full text-center shadow-2xl">
