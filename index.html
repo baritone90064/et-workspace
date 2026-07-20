@@ -292,8 +292,9 @@
         const googleProvider = new firebase.auth.GoogleAuthProvider();
         googleProvider.setCustomParameters({ prompt: 'select_account' });
         const ALLOWED_EMAILS = ['baritone90064@gmail.com', 'terry4410@gmail.com'];
-        const AUTH_POPUP_TIMEOUT_MS = 30000;
+        const AUTH_POPUP_WATCHDOG_MS = 45000;
         const DATA_LOADING_TIMEOUT_MS = 15000;
+        const GOOGLE_REDIRECT_PENDING_KEY = 'teLifeLogGoogleRedirectPending';
 
         const { useState, useEffect, useMemo, useRef } = React;
 
@@ -636,6 +637,30 @@
                     .finally(() => window.clearTimeout(timerId));
             };
 
+            const isStandaloneApp = () => {
+                try {
+                    return window.matchMedia?.('(display-mode: standalone)')?.matches === true
+                        || window.navigator.standalone === true;
+                } catch (error) {
+                    return false;
+                }
+            };
+
+            const isMobileBrowser = () => {
+                const userAgent = navigator.userAgent || '';
+                return /Android|iPhone|iPad|iPod|Mobile/i.test(userAgent)
+                    || Math.min(window.innerWidth || 9999, window.screen?.width || 9999) <= 768;
+            };
+
+            const isEmbeddedPage = () => {
+                try { return window.self !== window.top; }
+                catch (error) { return true; }
+            };
+
+            // 此 App 部署在 Vercel。為避免 signInWithRedirect 在第三方儲存限制下無法回傳，
+            // Vercel 正式網域一律使用 popup。請用 Safari／Chrome 正式分頁開啟，不要在內嵌預覽中登入。
+            const shouldUseGoogleRedirect = () => false;
+
             const getGoogleLoginErrorMessage = (err) => {
                 switch (err?.code) {
                     case 'auth/popup-blocked':
@@ -643,21 +668,37 @@
                     case 'auth/popup-closed-by-user':
                     case 'auth/cancelled-popup-request':
                         return 'Google 登入尚未完成，請重新登入。';
-                    case 'auth/popup-timeout':
-                        return 'Google 登入等待逾時。請關閉尚未完成的登入視窗後，再重新登入。';
                     case 'auth/unauthorized-domain':
-                        return '目前網站網域尚未加入 Firebase 授權網域。';
+                        return `目前網站網域尚未加入 Firebase 授權網域：${window.location.hostname}`;
                     case 'auth/network-request-failed':
                         return '網路連線異常，請確認網路後再試一次。';
                     case 'auth/web-storage-unsupported':
                         return '瀏覽器目前禁止儲存登入狀態，請允許 Cookie／網站資料後再試一次。';
                     case 'auth/operation-not-supported-in-this-environment':
-                        return '目前瀏覽器環境不支援 Google 登入，請改用一般瀏覽器開啟。';
+                        return '目前瀏覽器環境不支援 Google 登入，請改用 Safari、Chrome 或 Edge 開啟正式網站。';
                     case 'auth/account-exists-with-different-credential':
                         return '此電子郵件已使用其他登入方式建立，請改用原本的登入方式。';
                     default:
                         return err?.message || 'Google 登入失敗，請稍後再試。';
                 }
+            };
+
+            const acceptGoogleUser = async (firebaseUser) => {
+                if (!firebaseUser) return false;
+                const email = getFirebaseUserEmail(firebaseUser);
+
+                if (!isAllowedEmail(email)) {
+                    await auth.signOut().catch(() => {});
+                    setUser(null);
+                    setAuthError('此 Google 帳號沒有權限使用 T&E LifeLog。');
+                    setIsInitialLoading(false);
+                    return false;
+                }
+
+                setAuthError('');
+                setUser(firebaseUser);
+                setIsInitialLoading(true);
+                return true;
             };
 
             const signInWithGoogle = async () => {
@@ -666,65 +707,64 @@
                 setIsSigningIn(true);
                 setAuthError('');
 
-                try {
-                    // Persistence 失敗不應阻止登入；最多等 10 秒後繼續。
-                    try {
-                        await withTimeout(
-                            auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL),
-                            10000,
-                            'auth/persistence-timeout',
-                            '登入狀態保存設定逾時'
-                        );
-                    } catch (persistenceError) {
-                        console.warn('登入狀態保存設定失敗，改用瀏覽器預設值:', persistenceError);
-                    }
+                if (window.location.protocol === 'file:') {
+                    setAuthError('Google 登入不能從本機 HTML 檔直接執行，請從正式部署網址開啟。');
+                    setIsSigningIn(false);
+                    return;
+                }
 
-                    // 清除舊版留下的匿名登入狀態，避免被誤判為未授權帳號。
+                if (isEmbeddedPage()) {
+                    setAuthError('目前頁面是在內嵌預覽中，Google 登入無法完成。請用新分頁開啟正式網站後再登入。');
+                    setIsSigningIn(false);
+                    return;
+                }
+
+                try {
+                    // setPersistence 已在 App 初始化時設定。不要在點擊後先 await，
+                    // 以免 Safari 判定 popup 已失去使用者點擊觸發資格。
                     if (auth.currentUser?.isAnonymous) {
                         await auth.signOut();
                     }
 
-                    // 不要在登入後呼叫 user.reload()。
-                    // result.user 已包含 Google 帳號 email；reload 在部分瀏覽器可能長時間不回應，
-                    // 會讓 finally 無法執行，按鈕永久停在「登入中...」。
-                    const result = await withTimeout(
-                        auth.signInWithPopup(googleProvider),
-                        AUTH_POPUP_TIMEOUT_MS,
-                        'auth/popup-timeout',
-                        'Google 登入等待逾時'
-                    );
+                    if (shouldUseGoogleRedirect()) {
+                        // iPhone、Android 或加入主畫面的 Web App：改用整頁重新導向，
+                        // 避免 popup 開到 Safari／新分頁後無法回傳給原本 App。
+                        try { sessionStorage.setItem(GOOGLE_REDIRECT_PENDING_KEY, '1'); }
+                        catch (error) {}
 
-                    const signedInUser = result?.user || auth.currentUser;
-                    if (!signedInUser) {
-                        throw createTimeoutError('auth/no-current-user', 'Google 登入完成，但未取得使用者資料。');
-                    }
-
-                    const email = getFirebaseUserEmail(signedInUser);
-                    if (!isAllowedEmail(email)) {
-                        await auth.signOut();
-                        setUser(null);
-                        setAuthError('此 Google 帳號沒有權限使用 T&E LifeLog。');
-                        setIsInitialLoading(false);
+                        await auth.signInWithRedirect(googleProvider);
                         return;
                     }
 
-                    setUser(signedInUser);
-                    setIsInitialLoading(true);
+                    // 桌機使用 popup。Watchdog 只解除畫面狀態，不用 Promise.race 中斷 Firebase 流程。
+                    let popupFinished = false;
+                    const watchdogId = window.setTimeout(() => {
+                        if (!popupFinished && !auth.currentUser) {
+                            setIsSigningIn(false);
+                            setAuthError('Google 登入視窗尚未完成。請關閉舊視窗後重試，或確認瀏覽器沒有封鎖彈出視窗。');
+                        }
+                    }, AUTH_POPUP_WATCHDOG_MS);
+
+                    try {
+                        const result = await auth.signInWithPopup(googleProvider);
+                        popupFinished = true;
+                        await acceptGoogleUser(result?.user || auth.currentUser);
+                    } finally {
+                        popupFinished = true;
+                        window.clearTimeout(watchdogId);
+                    }
                 } catch (err) {
                     console.error('Google 登入失敗:', err);
 
-                    // 即使 popup Promise 逾時，只要 Firebase 已完成登入，仍交給 Auth 狀態繼續。
                     const currentUser = auth.currentUser;
-                    const currentEmail = getFirebaseUserEmail(currentUser);
-                    if (currentUser && isAllowedEmail(currentEmail)) {
-                        setUser(currentUser);
-                        setAuthError('');
-                        setIsInitialLoading(true);
+                    if (currentUser && isAllowedEmail(getFirebaseUserEmail(currentUser))) {
+                        await acceptGoogleUser(currentUser);
                     } else {
                         setAuthError(getGoogleLoginErrorMessage(err));
                         setIsInitialLoading(false);
                     }
                 } finally {
+                    // redirect 成功時頁面會離開；若沒有離開，確保按鈕恢復。
                     setIsSigningIn(false);
                 }
             };
@@ -752,14 +792,33 @@
                     setIsInitialLoading(false);
                 };
 
+                // 處理行動版 signInWithRedirect 回到本頁後的結果與錯誤。
+                auth.getRedirectResult()
+                    .then(async result => {
+                        if (!isMounted) return;
+                        try { sessionStorage.removeItem(GOOGLE_REDIRECT_PENDING_KEY); }
+                        catch (error) {}
+
+                        if (result?.user) {
+                            await acceptGoogleUser(result.user);
+                        }
+                    })
+                    .catch(err => {
+                        if (!isMounted) return;
+                        console.error('Google redirect 登入失敗:', err);
+                        setAuthError(getGoogleLoginErrorMessage(err));
+                        setIsInitialLoading(false);
+                    })
+                    .finally(() => {
+                        if (isMounted) setIsSigningIn(false);
+                    });
+
                 const unsubscribe = auth.onAuthStateChanged(
                     currentUser => {
                         if (!isMounted) return;
 
-                        // Auth observer 一有結果就解除登入按鈕狀態，避免 UI 永久卡住。
                         setIsSigningIn(false);
 
-                        // 舊版匿名登入不再使用；偵測到時直接清除並回登入畫面。
                         if (currentUser?.isAnonymous) {
                             auth.signOut()
                                 .catch(err => console.warn('清除舊匿名登入失敗:', err))
@@ -768,7 +827,6 @@
                         }
 
                         if (currentUser) {
-                            // Firebase 傳入的 currentUser 已可直接取得 email，不需要再 reload()。
                             const email = getFirebaseUserEmail(currentUser);
 
                             if (!isAllowedEmail(email)) {
@@ -781,17 +839,18 @@
 
                             setAuthError('');
                             setUser(currentUser);
-                            setIsInitialLoading(true);
                             return;
                         }
 
-                        finishSignedOutState();
+                        setUser(null);
+                        setIsInitialLoading(false);
                     },
                     err => {
-                        console.error('監聽登入狀態失敗:', err);
                         if (!isMounted) return;
+                        console.error('監聽登入狀態失敗:', err);
                         setAuthError(getGoogleLoginErrorMessage(err));
-                        finishSignedOutState();
+                        setIsSigningIn(false);
+                        setIsInitialLoading(false);
                     }
                 );
 
