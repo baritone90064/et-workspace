@@ -203,6 +203,14 @@
             box-shadow: 0 -5px 25px rgba(0,0,0,0.04);
         }
         
+        /* 行事曆今天日期：奶油黃；點擊選取仍使用藍色 */
+        .cal-day-today {
+            background-color: var(--pastel-yellow) !important;
+            color: var(--text-yellow) !important;
+            border-color: #F5C76B !important;
+            box-shadow: 0 3px 9px rgba(251, 231, 198, 0.9);
+        }
+
         /* 行事曆點擊選取特效 */
         .cal-day-active {
             background-color: var(--pastel-blue) !important;
@@ -330,7 +338,7 @@
         };
 
         const getDateRangeByShortcut = (shortcut) => {
-            // 「全部期間」不設定起訖日，讓 Firestore 讀取目前帳號可存取的全部日期資料。
+            // 「All」不設定起訖日，讓 Firestore 讀取目前帳號可存取的全部日期資料。
             if (shortcut === 'all') return { start: '', end: '' };
             if (shortcut === 'year') return getYearDateRange();
             if (shortcut === 'month') return getMonthDateRange(getCurrentMonthString());
@@ -1899,7 +1907,7 @@
             const dailyQuerySummary = useMemo(() => {
                 if (!hasDailyQuery) return '';
                 return [
-                    (!dailyQuery.start && !dailyQuery.end) ? '全部期間' : formatQueryDateSummary(dailyQuery.start, dailyQuery.end),
+                    (!dailyQuery.start && !dailyQuery.end) ? 'All' : formatQueryDateSummary(dailyQuery.start, dailyQuery.end),
                     dailyQuery.item !== 'all' ? dailyQuery.item : '',
                     dailyQuery.owner !== 'all' ? dailyQuery.owner : '',
                     dailyQuery.note.trim() ? `備註：${dailyQuery.note.trim()}` : ''
@@ -2351,7 +2359,7 @@
                                 <div key={i} 
                                     onClick={() => { if(d) setSelectedCalDate(selectedCalDate === d.dateStr ? null : d.dateStr); }}
                                     className={`p-1 flex flex-col items-center justify-start min-h-[45px] rounded-xl transition-all cursor-pointer border border-transparent
-                                        ${d ? (selectedCalDate === d.dateStr ? 'cal-day-active' : 'bg-gray-50 hover:bg-gray-100 hover:border-gray-200') : ''}`}>
+                                        ${d ? (selectedCalDate === d.dateStr ? 'cal-day-active' : (d.dateStr === getLocalDateString() ? 'cal-day-today hover:brightness-95' : 'bg-gray-50 hover:bg-gray-100 hover:border-gray-200')) : ''}`}>
                                     {d && (
                                         <>
                                             <span className="text-[12px] font-bold">{d.day}</span>
@@ -2533,13 +2541,13 @@
                         </button>
                         {!isAnalyticsFilterOpen && (
                             <div className="text-[12px] font-bold text-[var(--bubble-text)]/45 truncate">
-                                {[(!analyticsStart && !analyticsEnd) ? '全部期間' : formatQueryDateSummary(analyticsStart, analyticsEnd), analyticsCatFilter !== 'all' ? analyticsCatFilter : '', analyticsOwnerFilter !== 'all' ? analyticsOwnerFilter : '', analyticsKeyword ? `關鍵字：${analyticsKeyword}` : ''].filter(Boolean).join('｜') || '未設定篩選'}
+                                {[(!analyticsStart && !analyticsEnd) ? 'All' : formatQueryDateSummary(analyticsStart, analyticsEnd), analyticsCatFilter !== 'all' ? analyticsCatFilter : '', analyticsOwnerFilter !== 'all' ? analyticsOwnerFilter : '', analyticsKeyword ? `關鍵字：${analyticsKeyword}` : ''].filter(Boolean).join('｜') || '未設定篩選'}
                             </div>
                         )}
                         {isAnalyticsFilterOpen && (
                             <div className="space-y-3">
                                 <div className="grid grid-cols-4 gap-2">
-                                    <button onClick={()=>applyAnalyticsDateShortcut('all')} className="bubble-btn btn-outline !py-1.5 !px-2 !text-xs !rounded-xl">全部期間</button>
+                                    <button onClick={()=>applyAnalyticsDateShortcut('all')} className="bubble-btn btn-outline !py-1.5 !px-2 !text-xs !rounded-xl">All</button>
                                     <button onClick={()=>applyAnalyticsDateShortcut('year')} className="bubble-btn btn-outline !py-1.5 !px-2 !text-xs !rounded-xl">今年</button>
                                     <button onClick={()=>applyAnalyticsDateShortcut('month')} className="bubble-btn btn-outline !py-1.5 !px-2 !text-xs !rounded-xl">本月</button>
                                     <button onClick={()=>applyAnalyticsDateShortcut('lastMonth')} className="bubble-btn btn-outline !py-1.5 !px-2 !text-xs !rounded-xl">上月</button>
@@ -2548,7 +2556,6 @@
                                     <input type="date" value={analyticsDraftStart} onChange={e=>setAnalyticsDraftStart(e.target.value)} className="w-full min-w-0 !max-w-full !bg-white !px-2 !py-2 !text-[12px] sm:text-sm text-center" />
                                     <input type="date" value={analyticsDraftEnd} onChange={e=>setAnalyticsDraftEnd(e.target.value)} className="w-full min-w-0 !max-w-full !bg-white !px-2 !py-2 !text-[12px] sm:text-sm text-center" />
                                 </div>
-                                <div className="text-[11px] font-bold text-[var(--bubble-text)]/40 px-1">「全部期間」會取消日期限制；「清除」則回到本月。</div>
                                 {isAnalyticsDraftDateInvalid && <div className="text-[var(--text-orange)] text-xs font-bold">截止日期不能早於起始日期！</div>}
                                 <div className="grid grid-cols-2 gap-2">
                                     <select value={analyticsDraftCatFilter} onChange={e=>setAnalyticsDraftCatFilter(e.target.value)} className="w-full min-w-0 !max-w-full !py-2 !px-3 !text-sm">
@@ -2789,7 +2796,7 @@
                                 </div>
                                 <div className="space-y-3">
                                     <div className="grid grid-cols-4 gap-2">
-                                        <button onClick={()=>applyDailyDateShortcut('all')} className="bubble-btn btn-outline !py-1.5 !px-2 !text-xs !rounded-xl">全部期間</button>
+                                        <button onClick={()=>applyDailyDateShortcut('all')} className="bubble-btn btn-outline !py-1.5 !px-2 !text-xs !rounded-xl">All</button>
                                         <button onClick={()=>applyDailyDateShortcut('year')} className="bubble-btn btn-outline !py-1.5 !px-2 !text-xs !rounded-xl">今年</button>
                                         <button onClick={()=>applyDailyDateShortcut('month')} className="bubble-btn btn-outline !py-1.5 !px-2 !text-xs !rounded-xl">本月</button>
                                         <button onClick={()=>applyDailyDateShortcut('lastMonth')} className="bubble-btn btn-outline !py-1.5 !px-2 !text-xs !rounded-xl">上月</button>
@@ -2798,7 +2805,6 @@
                                         <input type="date" value={dailyQueryDraft.start} onChange={e=>setDailyQueryDraft({...dailyQueryDraft, start: e.target.value})} className="w-full min-w-0 !max-w-full !text-[12px] text-center" />
                                         <input type="date" value={dailyQueryDraft.end} onChange={e=>setDailyQueryDraft({...dailyQueryDraft, end: e.target.value})} className="w-full min-w-0 !max-w-full !text-[12px] text-center" />
                                     </div>
-                                    <div className="text-[11px] font-bold text-[var(--bubble-text)]/40 px-1">「全部期間」會取消日期限制；「清除」則回到本月。</div>
                                     <div className="grid grid-cols-2 gap-2">
                                         <select value={dailyQueryDraft.item} onChange={e=>setDailyQueryDraft({...dailyQueryDraft, item: e.target.value})} className="w-full min-w-0 !max-w-full !text-sm">
                                             <option value="all">分類</option>
