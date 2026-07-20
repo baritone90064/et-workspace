@@ -306,10 +306,13 @@
 
         const getCurrentMonthString = () => getLocalDateString().substring(0, 7);
 
+        // 回傳「含首尾」的月份日期區間，例如 2026-07-01 ～ 2026-07-31。
+        // 畫面上的日期欄位與前端篩選都使用包含截止日的語意；
+        // Firestore 若需要「小於下一日」的查詢，再由呼叫端使用 getNextDateString(end) 轉換。
         const getMonthDateRange = (monthKey) => {
             const [year, month] = monthKey.split('-').map(Number);
             const startDate = new Date(year, month - 1, 1);
-            const endDate = new Date(year, month, 1);
+            const endDate = new Date(year, month, 0);
             const toLocalISO = (d) => {
                 const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
                 return local.toISOString().split('T')[0];
@@ -599,6 +602,16 @@
                 const hasTerry = names.includes('Terry');
                 const hasEric = names.includes('Eric');
                 return hasTerry && hasEric && !names.includes(comboOwner) ? [...names, comboOwner] : names;
+            }, [members]);
+
+            // 專案的 owners 是陣列；增加「Terry； Eric」條件，用來查詢兩人共同參與的專案。
+            const projectOwnerOptions = useMemo(() => {
+                const names = members.map(m => m.name).filter(Boolean).map(normalizeDailyOwnerOption);
+                const hasTerry = names.includes('Terry');
+                const hasEric = names.includes('Eric');
+                return hasTerry && hasEric && !names.includes(DAILY_COMBO_OWNER)
+                    ? [...names, DAILY_COMBO_OWNER]
+                    : names;
             }, [members]);
 
             const markSourceLoaded = (key) => {
@@ -926,7 +939,7 @@
                     if (dailyQuery.end) query = query.where('date', '<', getNextDateString(dailyQuery.end));
                 } else if (dailyMonthFilter !== 'all') {
                     const { start, end } = getMonthDateRange(dailyMonthFilter);
-                    query = query.where('date', '>=', start).where('date', '<', end);
+                    query = query.where('date', '>=', start).where('date', '<', getNextDateString(end));
                 }
 
                 setIsDailyLoading(true);
@@ -1967,7 +1980,15 @@
                 }
 
                 if (projectQuery.category !== 'all') filtered = filtered.filter(t => t.category === projectQuery.category);
-                if (projectQuery.owner !== 'all') filtered = filtered.filter(t => (t.owners || []).includes(projectQuery.owner));
+                if (projectQuery.owner !== 'all') {
+                    filtered = filtered.filter(t => {
+                        const currentOwners = (t.owners || []).map(normalizeDailyOwnerOption);
+                        if (projectQuery.owner === DAILY_COMBO_OWNER) {
+                            return currentOwners.includes('Terry') && currentOwners.includes('Eric');
+                        }
+                        return currentOwners.includes(normalizeDailyOwnerOption(projectQuery.owner));
+                    });
+                }
                 if (projectQuery.expenseItem !== 'all') filtered = filtered.filter(t => (t.expenses || []).some(e => e.item === projectQuery.expenseItem));
 
                 const keyword = projectQuery.text.trim();
@@ -2348,30 +2369,28 @@
                         )}
                     </div>
 
-                    <div className="flex justify-between items-center mx-2 gap-2">
-                        <div className="flex gap-2 bg-white p-1.5 rounded-[20px] shadow-sm flex-grow">
-                            <button onClick={()=>switchProjectSubTab('active')} className={`flex-1 py-2 font-black rounded-[15px] transition-all ${projectSubTab==='active' ? 'bg-[var(--pastel-mint)] text-[var(--text-mint)]' : 'text-[var(--bubble-text)]/50 hover:bg-gray-50'}`}>進行中</button>
-                            <button onClick={()=>switchProjectSubTab('completed')} className={`flex-1 py-2 font-black rounded-[15px] transition-all ${projectSubTab==='completed' ? 'bg-[var(--pastel-gray)] text-gray-700' : 'text-[var(--bubble-text)]/50 hover:bg-gray-50'}`}>已結束</button>
+                    <div className="flex items-center mx-2 gap-2">
+                        <div className="flex gap-1.5 bg-white p-1.5 rounded-[20px] shadow-sm flex-grow min-w-0">
+                            <button onClick={()=>switchProjectSubTab('active')} className={`flex-1 min-w-0 py-2 px-1 text-[14px] font-black rounded-[15px] transition-all ${projectSubTab==='active' ? 'bg-[var(--pastel-mint)] text-[var(--text-mint)]' : 'text-[var(--bubble-text)]/50 hover:bg-gray-50'}`}>進行中</button>
+                            <button onClick={()=>switchProjectSubTab('completed')} className={`flex-1 min-w-0 py-2 px-1 text-[14px] font-black rounded-[15px] transition-all ${projectSubTab==='completed' ? 'bg-[var(--pastel-gray)] text-gray-700' : 'text-[var(--bubble-text)]/50 hover:bg-gray-50'}`}>已結束</button>
                         </div>
-                        <button onClick={()=>setProjectSort(prev => prev === 'desc' ? 'asc' : 'desc')} className="bubble-btn btn-outline bg-white !p-3 shadow-sm border-none h-full" title={projectSort === 'desc' ? '改為舊到新' : '改為新到舊'}>
+                        <button onClick={openProjectQueryPanel} className={`bubble-btn btn-outline bg-white !p-3 shadow-sm border-none shrink-0 ${hasProjectQuery ? 'text-[var(--text-mint)] !bg-[var(--pastel-mint)]/30' : ''}`} title="專案查詢">
+                            <Icon name="search" size={20} />
+                        </button>
+                        <button onClick={()=>setProjectSort(prev => prev === 'desc' ? 'asc' : 'desc')} className="bubble-btn btn-outline bg-white !p-3 shadow-sm border-none shrink-0" title={projectSort === 'desc' ? '改為舊到新' : '改為新到舊'}>
                             <Icon name={projectSort === 'desc' ? "sort-desc" : "sort-asc"} size={20} />
                         </button>
                     </div>
 
-                    <div className="mx-2 space-y-2">
-                        <div className="flex justify-between items-center gap-2">
-                            {hasProjectQuery ? (
-                                <div className="flex-grow min-w-0 bg-[var(--pastel-mint)]/35 text-[var(--text-mint)] px-3 py-2 rounded-[16px] text-[12px] font-black flex items-center justify-between gap-2">
-                                    <span className="truncate">查詢：{projectQuerySummary || '已套用'}</span>
-                                    <button onClick={clearProjectQuery} className="shrink-0 bg-white/80 rounded-full p-1"><Icon name="x" size={14}/></button>
-                                </div>
-                            ) : <div className="flex-grow"></div>}
-                            <button onClick={openProjectQueryPanel} className={`bubble-btn btn-outline bg-white !p-3 shadow-sm border-none ${hasProjectQuery ? 'text-[var(--text-mint)] bg-[var(--pastel-mint)]/30' : ''}`} title="專案查詢">
-                                <Icon name="search" size={20} />
-                            </button>
+                    {hasProjectQuery && (
+                        <div className="mx-2 space-y-2">
+                            <div className="min-w-0 bg-[var(--pastel-mint)]/35 text-[var(--text-mint)] px-3 py-2 rounded-[16px] text-[12px] font-black flex items-center justify-between gap-2">
+                                <span className="truncate">查詢：{projectQuerySummary || '已套用'}</span>
+                                <button onClick={clearProjectQuery} className="shrink-0 bg-white/80 rounded-full p-1"><Icon name="x" size={14}/></button>
+                            </div>
+                            <div className="px-2 text-[12px] font-bold text-[var(--bubble-text)]/45">篩選結果：{displayProjects.length} 個專案</div>
                         </div>
-                        {hasProjectQuery && <div className="px-2 text-[12px] font-bold text-[var(--bubble-text)]/45">篩選結果：{displayProjects.length} 個專案</div>}
-                    </div>
+                    )}
 
                     <div className="space-y-4">
                         {displayProjects.length === 0 && <p className="text-center font-bold text-[var(--bubble-text)]/40 py-10">{hasProjectQuery ? '找不到符合查詢條件的專案' : '尚無專案'}</p>}
@@ -2818,7 +2837,7 @@
                                     </div>
                                     <select value={projectQueryDraft.owner} onChange={e=>setProjectQueryDraft({...projectQueryDraft, owner: e.target.value})} className="w-full min-w-0 !max-w-full !text-sm">
                                         <option value="all">成員</option>
-                                        {members.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}
+                                        {projectOwnerOptions.map(owner => <option key={owner} value={owner}>{owner}</option>)}
                                     </select>
                                     <div className="flex gap-3 pt-2">
                                         <button onClick={clearProjectQuery} className="bubble-btn btn-outline flex-1 py-3">清除</button>
