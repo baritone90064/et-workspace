@@ -499,6 +499,13 @@
             const [categories, setCategories] = useState([]);
             const [expenseItems, setExpenseItems] = useState([]);
             const [members, setMembers] = useState([]);
+
+            // 設定頁排序草稿：拖曳只調整本機順序，按「儲存排序」後才一次寫入 Firebase。
+            const [settingsDraftOrders, setSettingsDraftOrders] = useState({ categories: [], expenseItems: [] });
+            const [settingsOrderDirty, setSettingsOrderDirty] = useState({ categories: false, expenseItems: false });
+            const [settingsDragging, setSettingsDragging] = useState(null);
+            const settingsListRefs = useRef({});
+            const settingsDragRef = useRef(null);
             
             // --- UI States ---
             const [activeTab, setActiveTab] = useState('daily'); 
@@ -624,6 +631,38 @@
                     ? [...names, DAILY_COMBO_OWNER]
                     : names;
             }, [members]);
+
+            const mergeSettingsDraftWithSource = (draftItems, sourceItems) => {
+                const sourceMap = new Map((sourceItems || []).map(item => [item.id, item]));
+                const merged = (draftItems || [])
+                    .filter(item => sourceMap.has(item.id))
+                    .map(item => sourceMap.get(item.id));
+                const existingIds = new Set(merged.map(item => item.id));
+                (sourceItems || []).forEach(item => {
+                    if (!existingIds.has(item.id)) merged.push(item);
+                });
+                return merged;
+            };
+
+            // Firebase 即時資料更新時：未調整排序就直接同步；有未儲存排序時則保留草稿順序，
+            // 同時合併新增、刪除或改名後的最新資料。
+            useEffect(() => {
+                setSettingsDraftOrders(prev => ({
+                    ...prev,
+                    categories: settingsOrderDirty.categories
+                        ? mergeSettingsDraftWithSource(prev.categories, categories)
+                        : [...categories]
+                }));
+            }, [categories]);
+
+            useEffect(() => {
+                setSettingsDraftOrders(prev => ({
+                    ...prev,
+                    expenseItems: settingsOrderDirty.expenseItems
+                        ? mergeSettingsDraftWithSource(prev.expenseItems, expenseItems)
+                        : [...expenseItems]
+                }));
+            }, [expenseItems]);
 
             const markSourceLoaded = (key) => {
                 setLoadedSources(prev => prev[key] ? prev : ({ ...prev, [key]: true }));
@@ -1432,161 +1471,10 @@
                 }
             };
 
-            // --- CSV 匯出匯入相關 ---
+            // --- CSV 匯出相關 ---
             const csvEscape = (value) => {
                 const text = value === undefined || value === null ? '' : String(value);
                 return `"${text.replace(/"/g, '""')}"`;
-            };
-
-            const parseCSVContent = (content) => {
-                const rows = [];
-                let row = [];
-                let current = '';
-                let inQuotes = false;
-                const text = String(content || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-
-                for (let i = 0; i < text.length; i++) {
-                    const char = text[i];
-                    const next = text[i + 1];
-
-                    if (char === '"' && inQuotes && next === '"') {
-                        current += '"';
-                        i++;
-                    } else if (char === '"') {
-                        inQuotes = !inQuotes;
-                    } else if (char === ',' && !inQuotes) {
-                        row.push(current.trim());
-                        current = '';
-                    } else if (char === '\n' && !inQuotes) {
-                        row.push(current.trim());
-                        if (row.some(cell => cell !== '')) rows.push(row);
-                        row = [];
-                        current = '';
-                    } else {
-                        current += char;
-                    }
-                }
-
-                row.push(current.trim());
-                if (row.some(cell => cell !== '')) rows.push(row);
-                return rows;
-            };
-
-
-            const normalizeHeader = (value) => String(value || '')
-                .replace(/^\uFEFF/, '')
-                .trim()
-                .replace(/\s+/g, '')
-                .toLowerCase();
-
-            const findColumnIndex = (headers, candidates) => {
-                const normalizedHeaders = headers.map(normalizeHeader);
-                for (const candidate of candidates) {
-                    const index = normalizedHeaders.indexOf(normalizeHeader(candidate));
-                    if (index >= 0) return index;
-                }
-                return -1;
-            };
-
-            const getCell = (row, index) => index >= 0 ? String(row[index] || '').trim() : '';
-
-            const looksLikeHeaderRow = (row) => {
-                const headerWords = ['日期', '金額', '費用分類', '專案名稱', '專案費用金額', '參與成員', '備註', '成員'];
-                return row.some(cell => headerWords.includes(normalizeHeader(cell)));
-            };
-
-            const normalizeDateValue = (value) => {
-                let text = String(value || '').trim().replace(/^\uFEFF/, '');
-                if (!text) return '';
-
-                text = text.replace(/[年月.]/g, '/').replace(/日/g, '').split(' ')[0].trim();
-
-                if (/^\d{8}$/.test(text)) {
-                    text = `${text.substring(0, 4)}/${text.substring(4, 6)}/${text.substring(6, 8)}`;
-                }
-
-                const serialText = text.replace(/,/g, '');
-                if (/^\d+(\.\d+)?$/.test(serialText)) {
-                    const serial = Number(serialText);
-                    if (serial > 20000 && serial < 80000) {
-                        const utcValue = Math.round((serial - 25569) * 86400 * 1000);
-                        const date = new Date(utcValue);
-                        if (!Number.isNaN(date.getTime())) return date.toISOString().slice(0, 10);
-                    }
-                }
-
-                const match = text.match(/^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})$/);
-                if (!match) return '';
-
-                const year = Number(match[1]);
-                const month = Number(match[2]);
-                const day = Number(match[3]);
-                const date = new Date(year, month - 1, day);
-
-                if (
-                    date.getFullYear() !== year ||
-                    date.getMonth() !== month - 1 ||
-                    date.getDate() !== day
-                ) return '';
-
-                return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-            };
-
-            const normalizeAmountValue = (value) => {
-                const original = String(value || '').trim();
-                if (!original) return { isValid: false, value: 0 };
-
-                let text = original
-                    .replace(/\s/g, '')
-                    .replace(/,/g, '')
-                    .replace(/，/g, '')
-                    .replace(/NTD/ig, '')
-                    .replace(/TWD/ig, '')
-                    .replace(/NT\$/ig, '')
-                    .replace(/[＄$元]/g, '');
-
-                const negativeMatch = text.match(/^\((.+)\)$/);
-                if (negativeMatch) text = `-${negativeMatch[1]}`;
-
-                const number = Number(text);
-                return { isValid: Number.isFinite(number), value: number };
-            };
-
-            const normalizeOwnerText = (value) => String(value || '')
-                .trim()
-                .replace(/\s*[;；,，、]\s*/g, '； ')
-                .replace(/\s+/g, ' ');
-
-            const splitOwners = (value) => String(value || '')
-                .split(/[;；,，、]/)
-                .map(owner => owner.trim())
-                .filter(Boolean);
-
-            const getDailyImportIndexes = (headers, hasHeader) => {
-                if (!hasHeader) return { date: 0, amount: 1, item: 2, desc: 3, owner: 4 };
-                return {
-                    date: findColumnIndex(headers, ['日期', 'date', '消費日期', '支出日期', '費用日期', '付款日期']),
-                    amount: findColumnIndex(headers, ['金額', 'amount', '費用金額', '支出金額', '消費金額', '付款金額']),
-                    item: findColumnIndex(headers, ['費用分類', '分類', '項目分類', '支出分類', '消費分類', 'item', 'category']),
-                    desc: findColumnIndex(headers, ['備註', '說明', '描述', '內容', 'memo', 'note', 'desc', 'description']),
-                    owner: findColumnIndex(headers, ['成員', 'member', 'owner', '使用者', '付款人', '人員'])
-                };
-            };
-
-            const getProjectImportIndexes = (headers, hasHeader) => {
-                if (!hasHeader) return { text: 0, category: 1, owners: 2, startDate: 3, endDate: 4, note: 5, expDate: 6, expAmount: 7, expItem: 8, expDesc: 9 };
-                return {
-                    text: findColumnIndex(headers, ['專案名稱', '專案', '行程名稱', '活動名稱', '名稱', 'project', 'projectname']),
-                    category: findColumnIndex(headers, ['專案類別', '類別', 'category', 'projectcategory']),
-                    owners: findColumnIndex(headers, ['參與成員', '成員', '負責人', '參與者', 'members', 'owners']),
-                    startDate: findColumnIndex(headers, ['起始日期', '開始日期', '專案起始日期', '行程起始日期', 'startdate']),
-                    endDate: findColumnIndex(headers, ['結束日期', '完成日期', '專案結束日期', '行程結束日期', 'enddate']),
-                    note: findColumnIndex(headers, ['專案備註', '行程備註', 'projectnote', 'projectmemo']),
-                    expDate: findColumnIndex(headers, ['專案費用日期', '費用日期', '支出日期', '消費日期', 'expensedate']),
-                    expAmount: findColumnIndex(headers, ['專案費用金額', '費用金額', '支出金額', '消費金額', '金額', 'amount', 'expenseamount']),
-                    expItem: findColumnIndex(headers, ['專案費用分類', '費用分類', '支出分類', '消費分類', '分類', 'expenseitem', 'expensecategory']),
-                    expDesc: findColumnIndex(headers, ['專案費用備註', '費用備註', '支出備註', '消費備註', '明細備註', 'expensedesc', 'expensenote'])
-                };
             };
 
             const downloadCSV = (filename, header, rows) => {
@@ -1596,6 +1484,7 @@
                 link.href = URL.createObjectURL(blob);
                 link.download = filename;
                 link.click();
+                window.setTimeout(() => URL.revokeObjectURL(link.href), 1000);
             };
 
             const handleExportDailyCSV = () => {
@@ -1628,212 +1517,6 @@
                 });
                 downloadCSV("TE_LifeLog_Projects.csv", ["專案名稱", "專案類別", "參與成員", "起始日期", "結束日期", "專案備註", "專案費用日期", "專案費用金額", "專案費用分類", "專案費用備註"], rows);
             };
-
-            const handleImportDailyCSV = (e) => {
-                const file = e.target.files[0];
-                if (!file) return;
-                setIsProcessing(true);
-                const reader = new FileReader();
-                reader.onload = async (ev) => {
-                    try {
-                        const rows = parseCSVContent(ev.target.result);
-                        if (rows.length === 0) throw new Error('CSV 沒有資料');
-
-                        const hasHeader = looksLikeHeaderRow(rows[0]);
-                        const headers = hasHeader ? rows[0] : [];
-                        const dataRows = hasHeader ? rows.slice(1) : rows;
-                        const idx = getDailyImportIndexes(headers, hasHeader);
-
-                        if (idx.date < 0 || idx.amount < 0 || idx.item < 0) {
-                            throw new Error('找不到必要欄位：日期、金額、費用分類');
-                        }
-
-                        const refBase = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('dailyExpenses');
-                        const skippedReasons = [];
-                        const now = new Date().toISOString();
-                        let batch = db.batch();
-                        let batchOps = 0;
-                        let count = 0;
-                        let skipped = 0;
-
-                        const commitIfNeeded = async (force = false) => {
-                            if (batchOps === 0) return;
-                            if (force || batchOps >= 450) {
-                                await batch.commit();
-                                batch = db.batch();
-                                batchOps = 0;
-                            }
-                        };
-
-                        for (let i = 0; i < dataRows.length; i++) {
-                            const row = dataRows[i];
-                            const lineNo = hasHeader ? i + 2 : i + 1;
-                            const date = normalizeDateValue(getCell(row, idx.date));
-                            const amountResult = normalizeAmountValue(getCell(row, idx.amount));
-                            const item = getCell(row, idx.item);
-                            const desc = getCell(row, idx.desc);
-                            const owner = normalizeOwnerText(getCell(row, idx.owner));
-
-                            if (!date || !amountResult.isValid || !item) {
-                                skipped++;
-                                if (skippedReasons.length < 5) {
-                                    const reason = !date ? '日期格式錯誤' : (!amountResult.isValid ? '金額不是數字' : '費用分類空白');
-                                    skippedReasons.push(`第 ${lineNo} 列：${reason}`);
-                                }
-                                continue;
-                            }
-
-                            const ref = refBase.doc();
-                            batch.set(ref, {
-                                date,
-                                amount: amountResult.value,
-                                item,
-                                desc: desc || '',
-                                owner: owner || '',
-                                createdAt: now,
-                                updatedAt: now
-                            });
-                            batchOps++;
-                            count++;
-                            await commitIfNeeded();
-                        }
-
-                        await commitIfNeeded(true);
-
-                        const detail = skippedReasons.length ? `\n\n略過原因範例：\n${skippedReasons.join('\n')}` : '';
-                        alert(`日常記帳匯入完成！\n成功：${count} 筆\n略過：${skipped} 筆${detail}`);
-                    } catch (error) {
-                        console.error('日常記帳匯入失敗:', error);
-                        alert(`日常記帳匯入失敗：${error.message || '請確認 CSV 欄位包含日期、金額、費用分類、備註、成員'}`);
-                    }
-                    setIsProcessing(false);
-                    e.target.value = '';
-                };
-                reader.readAsText(file);
-            };
-
-            const handleImportProjectCSV = (e) => {
-                const file = e.target.files[0];
-                if (!file) return;
-                setIsProcessing(true);
-                const reader = new FileReader();
-                reader.onload = async (ev) => {
-                    try {
-                        const rows = parseCSVContent(ev.target.result);
-                        if (rows.length === 0) throw new Error('CSV 沒有資料');
-
-                        const hasHeader = looksLikeHeaderRow(rows[0]);
-                        const headers = hasHeader ? rows[0] : [];
-                        const dataRows = hasHeader ? rows.slice(1) : rows;
-                        const idx = getProjectImportIndexes(headers, hasHeader);
-
-                        if (idx.text < 0) throw new Error('找不到必要欄位：專案名稱');
-
-                        const projectMap = new Map();
-                        const skippedReasons = [];
-                        const now = new Date().toISOString();
-                        let skippedRows = 0;
-                        let skippedExpenses = 0;
-
-                        for (let i = 0; i < dataRows.length; i++) {
-                            const row = dataRows[i];
-                            const lineNo = hasHeader ? i + 2 : i + 1;
-                            const text = getCell(row, idx.text);
-                            if (!text) {
-                                skippedRows++;
-                                if (skippedReasons.length < 5) skippedReasons.push(`第 ${lineNo} 列：專案名稱空白`);
-                                continue;
-                            }
-
-                            const projectCategory = getCell(row, idx.category);
-                            const projectOwnersRaw = getCell(row, idx.owners);
-                            const startRaw = getCell(row, idx.startDate);
-                            const endRaw = getCell(row, idx.endDate);
-                            const projectStartDate = startRaw ? normalizeDateValue(startRaw) : '';
-                            const projectEndDate = endRaw ? normalizeDateValue(endRaw) : '';
-                            const projectNote = getCell(row, idx.note);
-
-                            if (startRaw && !projectStartDate && skippedReasons.length < 5) skippedReasons.push(`第 ${lineNo} 列：起始日期格式錯誤，已留空`);
-                            if (endRaw && !projectEndDate && skippedReasons.length < 5) skippedReasons.push(`第 ${lineNo} 列：結束日期格式錯誤，已留空`);
-
-                            const key = [text, projectCategory || '', projectOwnersRaw || '', projectStartDate || '', projectEndDate || '', projectNote || ''].join('||');
-                            if (!projectMap.has(key)) {
-                                projectMap.set(key, {
-                                    text,
-                                    category: projectCategory || '',
-                                    owners: splitOwners(projectOwnersRaw),
-                                    startDate: projectStartDate || '',
-                                    endDate: projectEndDate || '',
-                                    note: projectNote || '',
-                                    showInCalendar: true,
-                                    images: [],
-                                    links: [],
-                                    expenses: [],
-                                    checklist: [],
-                                    completed: false,
-                                    createdAt: now,
-                                    updatedAt: now
-                                });
-                            }
-
-                            const expDateRaw = getCell(row, idx.expDate);
-                            const expAmountRaw = getCell(row, idx.expAmount);
-                            const expItem = getCell(row, idx.expItem);
-                            const expDesc = getCell(row, idx.expDesc);
-                            const hasExpenseData = expDateRaw || expAmountRaw || expItem || expDesc;
-
-                            if (hasExpenseData) {
-                                const expDate = expDateRaw ? normalizeDateValue(expDateRaw) : '';
-                                const amountResult = normalizeAmountValue(expAmountRaw);
-
-                                if ((expDateRaw && !expDate) || (expAmountRaw && !amountResult.isValid)) {
-                                    skippedExpenses++;
-                                    if (skippedReasons.length < 5) {
-                                        const reason = expDateRaw && !expDate ? '專案費用日期格式錯誤' : '專案費用金額不是數字';
-                                        skippedReasons.push(`第 ${lineNo} 列：${reason}`);
-                                    }
-                                    continue;
-                                }
-
-                                projectMap.get(key).expenses.push({
-                                    date: expDate || '',
-                                    amount: amountResult.isValid ? amountResult.value : 0,
-                                    item: expItem || '',
-                                    desc: expDesc || ''
-                                });
-                            }
-                        }
-
-                        const projects = Array.from(projectMap.values());
-                        if (projects.length === 0) throw new Error('沒有可匯入的專案資料');
-
-                        const refBase = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('tasks');
-                        let batch = db.batch();
-                        let batchOps = 0;
-                        for (const project of projects) {
-                            const ref = refBase.doc();
-                            batch.set(ref, project);
-                            batchOps++;
-                            if (batchOps >= 450) {
-                                await batch.commit();
-                                batch = db.batch();
-                                batchOps = 0;
-                            }
-                        }
-                        if (batchOps > 0) await batch.commit();
-
-                        const detail = skippedReasons.length ? `\n\n略過/修正原因範例：\n${skippedReasons.join('\n')}` : '';
-                        alert(`專案匯入完成！\n成功：${projects.length} 個專案\n略過列數：${skippedRows} 列\n略過費用：${skippedExpenses} 筆${detail}`);
-                    } catch (error) {
-                        console.error('專案匯入失敗:', error);
-                        alert(`專案匯入失敗：${error.message || '請確認 CSV 欄位包含專案名稱與相關欄位'}`);
-                    }
-                    setIsProcessing(false);
-                    e.target.value = '';
-                };
-                reader.readAsText(file);
-            };
-
 
 
             const hasDailyQuery = useMemo(() => {
@@ -2649,36 +2332,186 @@
                     </div>                </div>
             );
 
-            // 修改 Settings 裡排序的賦值方式，避免刪除又新增後出現同一個 order 的問題
-            const renderSettingsList = (title, collection, items) => (
-                <div className="mb-8">
-                    <div className="flex justify-between items-center px-2 mb-4">
-                        <h3 className="font-black text-xl">{title}</h3>
-                        <button onClick={()=>showInput(`新增${title}`, '', '請輸入名稱...', async (newName) => {
-                            const list = collection === 'members' ? members : collection === 'categories' ? categories : expenseItems;
-                            // 改為尋找目前最大的 order 值加一，而不是用陣列長度，避免刪除後發生重複 order
-                            const nextOrder = list.length > 0 ? Math.max(...list.map(l => l.order || 0)) + 1 : 0;
-                            await db.collection('artifacts').doc(appId).collection('public').doc('data').collection(collection).add({ name: newName, order: nextOrder, createdAt: new Date().toISOString() });
-                        })} className="bubble-btn btn-primary !py-1.5 !px-4 !text-[13px]"><Icon name="plus" size={16}/> 新增</button>
-                    </div>
-                    <div className="bubble-card bg-white overflow-hidden divide-y divide-gray-50 p-0">
-                        {items.length === 0 && <div className="p-6 text-center font-bold text-gray-400">無資料</div>}
-                        {items.map(item => (
-                            <div key={item.id} className="flex justify-between items-center p-4 hover:bg-[var(--bubble-bg)]/30 transition-colors">
-                                <span className="font-black text-[16px]">{item.name}</span>
-                                <div className="flex gap-2">
-                                    <button onClick={()=>showInput(`編輯名稱`, item.name, '輸入新名稱', async (newName) => {
-                                        await db.collection('artifacts').doc(appId).collection('public').doc('data').collection(collection).doc(item.id).update({ name: newName });
-                                    })} className="p-2 rounded-xl text-[var(--text-blue)] bg-[var(--pastel-blue)]/20 hover:bg-[var(--pastel-blue)] transition-all"><Icon name="edit-2" size={18}/></button>
-                                    <button onClick={()=>showConfirm('確認刪除', `確定要刪除「${item.name}」嗎？`, async () => {
-                                        await db.collection('artifacts').doc(appId).collection('public').doc('data').collection(collection).doc(item.id).delete();
-                                    })} className="p-2 rounded-xl text-[var(--text-orange)] bg-[var(--pastel-orange)]/20 hover:bg-[var(--pastel-orange)] transition-all"><Icon name="trash-2" size={18}/></button>
+            // 設定清單排序：針對 iPhone 使用 Pointer Events 自製拖曳，
+            // 拖曳只改本機草稿，使用者按下「儲存排序」後才批次寫入 Firebase。
+            const getSettingsDisplayItems = (collection, items, allowReorder) => {
+                if (!allowReorder) return items;
+                return settingsDraftOrders[collection] || items;
+            };
+
+            const startSettingsDrag = (event, collection, itemId) => {
+                if (isProcessing || !['categories', 'expenseItems'].includes(collection)) return;
+                event.preventDefault();
+                try { event.currentTarget.setPointerCapture(event.pointerId); } catch (error) {}
+                settingsDragRef.current = {
+                    collection,
+                    itemId,
+                    pointerId: event.pointerId,
+                    startY: event.clientY,
+                    activated: false
+                };
+                setSettingsDragging({ collection, itemId });
+                document.body.style.userSelect = 'none';
+                document.body.style.webkitUserSelect = 'none';
+            };
+
+            const moveSettingsDrag = (event) => {
+                const drag = settingsDragRef.current;
+                if (!drag || drag.pointerId !== event.pointerId) return;
+                event.preventDefault();
+
+                // 手指需先移動一小段距離才開始排序，降低 iPhone 誤觸。
+                if (!drag.activated) {
+                    if (Math.abs(event.clientY - drag.startY) < 7) return;
+                    drag.activated = true;
+                }
+
+                // 拖到螢幕上下邊緣時協助捲動，方便長清單排序。
+                if (event.clientY < 90) window.scrollBy(0, -10);
+                else if (event.clientY > window.innerHeight - 90) window.scrollBy(0, 10);
+
+                const container = settingsListRefs.current[drag.collection];
+                if (!container) return;
+                const candidateRows = Array.from(container.querySelectorAll('[data-settings-row-id]'))
+                    .filter(row => row.dataset.settingsRowId !== drag.itemId);
+
+                let insertIndex = candidateRows.length;
+                for (let index = 0; index < candidateRows.length; index++) {
+                    const rect = candidateRows[index].getBoundingClientRect();
+                    if (event.clientY < rect.top + rect.height / 2) {
+                        insertIndex = index;
+                        break;
+                    }
+                }
+
+                setSettingsDraftOrders(prev => {
+                    const current = prev[drag.collection] || [];
+                    const draggedItem = current.find(item => item.id === drag.itemId);
+                    if (!draggedItem) return prev;
+                    const remaining = current.filter(item => item.id !== drag.itemId);
+                    const nextItems = [...remaining];
+                    nextItems.splice(Math.max(0, Math.min(insertIndex, nextItems.length)), 0, draggedItem);
+                    const unchanged = nextItems.every((item, index) => item.id === current[index]?.id);
+                    return unchanged ? prev : { ...prev, [drag.collection]: nextItems };
+                });
+                setSettingsOrderDirty(prev => prev[drag.collection]
+                    ? prev
+                    : ({ ...prev, [drag.collection]: true }));
+            };
+
+            const endSettingsDrag = (event) => {
+                const drag = settingsDragRef.current;
+                if (!drag) return;
+                if (event?.pointerId !== undefined && drag.pointerId !== event.pointerId) return;
+                try { event?.currentTarget?.releasePointerCapture?.(drag.pointerId); } catch (error) {}
+                settingsDragRef.current = null;
+                setSettingsDragging(null);
+                document.body.style.userSelect = '';
+                document.body.style.webkitUserSelect = '';
+            };
+
+            const saveSettingsOrder = async (collection) => {
+                if (isProcessing || !settingsOrderDirty[collection]) return;
+                const orderedItems = settingsDraftOrders[collection] || [];
+                setIsProcessing(true);
+                try {
+                    const collectionRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection(collection);
+                    const batch = db.batch();
+                    const updatedAt = new Date().toISOString();
+                    orderedItems.forEach((item, index) => {
+                        batch.update(collectionRef.doc(item.id), { order: index, updatedAt });
+                    });
+                    await batch.commit();
+                    setSettingsOrderDirty(prev => ({ ...prev, [collection]: false }));
+                } catch (error) {
+                    console.error(`儲存${collection}排序失敗:`, error);
+                    alert('儲存排序失敗，請檢查網路後再試一次。');
+                } finally {
+                    setIsProcessing(false);
+                }
+            };
+
+            // 修改 Settings 裡排序的賦值方式，避免刪除又新增後出現同一個 order 的問題。
+            const renderSettingsList = (title, collection, items, allowReorder = false) => {
+                const displayItems = getSettingsDisplayItems(collection, items, allowReorder);
+                const isDirty = Boolean(allowReorder && settingsOrderDirty[collection]);
+
+                return (
+                    <div className="mb-8">
+                        <div className="flex justify-between items-center gap-3 px-2 mb-4">
+                            <div className="min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                    <h3 className="font-black text-xl">{title}</h3>
+                                    {isDirty && <span className="tag bg-[var(--pastel-yellow)] text-[var(--text-yellow)] !text-[11px]">尚未儲存</span>}
                                 </div>
+                                {allowReorder && <div className="text-[11px] font-bold text-gray-400 mt-1">按住拖曳把手調整順序</div>}
                             </div>
-                        ))}
+                            <div className="flex items-center gap-2 shrink-0">
+                                {allowReorder && (
+                                    <button
+                                        type="button"
+                                        disabled={!isDirty || isProcessing}
+                                        onClick={()=>saveSettingsOrder(collection)}
+                                        className="bubble-btn btn-mint !py-1.5 !px-3 !text-[12px] disabled:opacity-40"
+                                    >
+                                        <Icon name={isProcessing && isDirty ? "loader-circle" : "save"} size={15} className={isProcessing && isDirty ? "animate-spin" : ""}/>
+                                        儲存排序
+                                    </button>
+                                )}
+                                <button onClick={()=>showInput(`新增${title}`, '', '請輸入名稱...', async (newName) => {
+                                    const list = collection === 'members' ? members : collection === 'categories' ? categories : expenseItems;
+                                    const nextOrder = list.length > 0 ? Math.max(...list.map(l => l.order || 0)) + 1 : 0;
+                                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection(collection).add({ name: newName, order: nextOrder, createdAt: new Date().toISOString() });
+                                })} className="bubble-btn btn-primary !py-1.5 !px-3 !text-[12px]"><Icon name="plus" size={15}/> 新增</button>
+                            </div>
+                        </div>
+                        <div
+                            ref={element => { if (allowReorder) settingsListRefs.current[collection] = element; }}
+                            className="bubble-card bg-white overflow-hidden divide-y divide-gray-50 p-0"
+                        >
+                            {displayItems.length === 0 && <div className="p-6 text-center font-bold text-gray-400">無資料</div>}
+                            {displayItems.map(item => {
+                                const isDragging = settingsDragging?.collection === collection && settingsDragging?.itemId === item.id;
+                                return (
+                                    <div
+                                        key={item.id}
+                                        data-settings-row-id={item.id}
+                                        className={`flex justify-between items-center gap-2 p-3 transition-all ${isDragging ? 'relative z-10 bg-[var(--pastel-yellow)]/55 shadow-xl scale-[1.01]' : 'hover:bg-[var(--bubble-bg)]/30'}`}
+                                    >
+                                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                                            {allowReorder && (
+                                                <button
+                                                    type="button"
+                                                    aria-label={`拖曳調整「${item.name}」排序`}
+                                                    onPointerDown={event=>startSettingsDrag(event, collection, item.id)}
+                                                    onPointerMove={moveSettingsDrag}
+                                                    onPointerUp={endSettingsDrag}
+                                                    onPointerCancel={endSettingsDrag}
+                                                    onLostPointerCapture={endSettingsDrag}
+                                                    onContextMenu={event=>event.preventDefault()}
+                                                    className="w-11 h-11 shrink-0 rounded-2xl flex items-center justify-center text-[var(--text-mint)] bg-[var(--pastel-mint)]/30 active:scale-95 select-none"
+                                                    style={{ touchAction: 'none', WebkitTouchCallout: 'none' }}
+                                                >
+                                                    <Icon name="grip-vertical" size={22}/>
+                                                </button>
+                                            )}
+                                            <span className="font-black text-[16px] min-w-0 break-words">{item.name}</span>
+                                        </div>
+                                        <div className="flex gap-1.5 shrink-0">
+                                            <button disabled={isProcessing} onClick={()=>showInput(`編輯名稱`, item.name, '輸入新名稱', async (newName) => {
+                                                await db.collection('artifacts').doc(appId).collection('public').doc('data').collection(collection).doc(item.id).update({ name: newName });
+                                            })} className="p-2 rounded-xl text-[var(--text-blue)] bg-[var(--pastel-blue)]/20 hover:bg-[var(--pastel-blue)] transition-all disabled:opacity-40"><Icon name="edit-2" size={18}/></button>
+                                            <button disabled={isProcessing} onClick={()=>showConfirm('確認刪除', `確定要刪除「${item.name}」嗎？`, async () => {
+                                                await db.collection('artifacts').doc(appId).collection('public').doc('data').collection(collection).doc(item.id).delete();
+                                            })} className="p-2 rounded-xl text-[var(--text-orange)] bg-[var(--pastel-orange)]/20 hover:bg-[var(--pastel-orange)] transition-all disabled:opacity-40"><Icon name="trash-2" size={18}/></button>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
                     </div>
-                </div>
-            );
+                );
+            };
 
             if (!user) {
                 return (
@@ -2731,7 +2564,6 @@
                             <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-emerald-950 drop-shadow-sm flex justify-center items-center gap-3">
                                 <Icon name="sparkles" size={28} className="text-amber-500" /> T&E LifeLog
                             </h1>
-                            <button onClick={signOutUser} className="p-1.5 rounded-full bg-white/70 text-gray-400 shadow-sm" title="登出"><Icon name="log-out" size={16}/></button>
                         </div>
                     </header>
                     <main>
@@ -2745,30 +2577,28 @@
                                     <h1 className="text-2xl font-black tracking-tight">設定管理</h1>
                                 </div>
                                 {renderSettingsList("參與成員", "members", members)}
-                                {renderSettingsList("專案類別", "categories", categories)}
-                                {renderSettingsList("費用分類", "expenseItems", expenseItems)}
+                                {renderSettingsList("專案類別", "categories", categories, true)}
+                                {renderSettingsList("費用分類", "expenseItems", expenseItems, true)}
                                 
                                 <div className="mb-8 pt-4">
-                                    <h3 className="font-black text-xl px-2 mb-4">資料備份與匯入</h3>
+                                    <h3 className="font-black text-xl px-2 mb-4">資料備份與匯出</h3>
                                     <div className="bubble-card bg-white p-5 space-y-4">
                                         <p className="text-xs font-bold text-gray-500 mb-2 leading-relaxed">日常記帳欄位「日期、金額、費用分類、備註、成員」<br/>專案欄位「專案名稱、專案類別、參與成員、起始日期、結束日期、專案備註、專案費用日期、專案費用金額、專案費用分類、專案費用備註」</p>
                                         <div className="bg-[var(--bubble-bg)]/70 rounded-[20px] p-4 space-y-3">
                                             <div className="font-black text-sm text-[var(--text-blue)] flex items-center gap-2"><Icon name="wallet" size={16}/> 日常記帳 CSV</div>
-                                            <div className="grid grid-cols-2 gap-3">
-                                                <button onClick={handleExportDailyCSV} className="bubble-btn btn-outline !text-sm"><Icon name="download" size={16}/> 匯出目前日常</button>
-                                                <button onClick={() => document.getElementById('daily-csv-upload').click()} className="bubble-btn btn-outline !text-sm"><Icon name="upload" size={16}/> 匯入日常</button>
-                                                <input id="daily-csv-upload" type="file" accept=".csv" onChange={handleImportDailyCSV} className="hidden" />
-                                            </div>
+                                            <button onClick={handleExportDailyCSV} className="bubble-btn btn-outline w-full !text-sm"><Icon name="download" size={16}/> 匯出目前日常</button>
                                         </div>
                                         <div className="bg-[var(--bubble-bg)]/70 rounded-[20px] p-4 space-y-3">
                                             <div className="font-black text-sm text-[var(--text-mint)] flex items-center gap-2"><Icon name="folder" size={16}/> 專案資料 CSV</div>
-                                            <div className="grid grid-cols-2 gap-3">
-                                                <button onClick={handleExportProjectCSV} className="bubble-btn btn-outline !text-sm"><Icon name="download" size={16}/> 匯出專案</button>
-                                                <button onClick={() => document.getElementById('project-csv-upload').click()} className="bubble-btn btn-outline !text-sm"><Icon name="upload" size={16}/> 匯入專案</button>
-                                                <input id="project-csv-upload" type="file" accept=".csv" onChange={handleImportProjectCSV} className="hidden" />
-                                            </div>
+                                            <button onClick={handleExportProjectCSV} className="bubble-btn btn-outline w-full !text-sm"><Icon name="download" size={16}/> 匯出專案</button>
                                         </div>
                                     </div>
+                                </div>
+
+                                <div className="pb-8">
+                                    <button onClick={signOutUser} className="bubble-btn btn-outline w-full py-3 justify-center text-[var(--text-orange)]">
+                                        <Icon name="log-out" size={18}/> 登出
+                                    </button>
                                 </div>
                             </div>
                         )}
