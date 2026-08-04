@@ -500,9 +500,11 @@
             const [expenseItems, setExpenseItems] = useState([]);
             const [members, setMembers] = useState([]);
 
-            // 設定頁排序草稿：拖曳只調整本機順序，按「儲存排序」後才一次寫入 Firebase。
+            // 設定頁排序草稿：只有進入「調整排序」模式後才顯示拖曳把手，
+            // 拖曳只調整本機順序，按「儲存」後才一次寫入 Firebase。
             const [settingsDraftOrders, setSettingsDraftOrders] = useState({ categories: [], expenseItems: [] });
             const [settingsOrderDirty, setSettingsOrderDirty] = useState({ categories: false, expenseItems: false });
+            const [settingsOrderEditing, setSettingsOrderEditing] = useState({ categories: false, expenseItems: false });
             const [settingsDragging, setSettingsDragging] = useState(null);
             const settingsListRefs = useRef({});
             const settingsDragRef = useRef(null);
@@ -2332,15 +2334,42 @@
                     </div>                </div>
             );
 
-            // 設定清單排序：針對 iPhone 使用 Pointer Events 自製拖曳，
-            // 拖曳只改本機草稿，使用者按下「儲存排序」後才批次寫入 Firebase。
+            // 設定清單排序：先進入「調整排序」模式才開放拖曳，避免 iPhone 捲動時誤觸。
+            // 拖曳只改本機草稿；按「儲存」才批次寫入 Firebase，按「取消」則還原。
             const getSettingsDisplayItems = (collection, items, allowReorder) => {
                 if (!allowReorder) return items;
                 return settingsDraftOrders[collection] || items;
             };
 
-            const startSettingsDrag = (event, collection, itemId) => {
+            const resetSettingsDragState = () => {
+                settingsDragRef.current = null;
+                setSettingsDragging(null);
+                document.body.style.userSelect = '';
+                document.body.style.webkitUserSelect = '';
+            };
+
+            const beginSettingsOrderEdit = (collection, items) => {
                 if (isProcessing || !['categories', 'expenseItems'].includes(collection)) return;
+                resetSettingsDragState();
+                setSettingsDraftOrders(prev => ({ ...prev, [collection]: [...items] }));
+                setSettingsOrderDirty(prev => ({ ...prev, [collection]: false }));
+                setSettingsOrderEditing(prev => ({ ...prev, [collection]: true }));
+            };
+
+            const cancelSettingsOrderEdit = (collection, items) => {
+                if (isProcessing) return;
+                resetSettingsDragState();
+                setSettingsDraftOrders(prev => ({ ...prev, [collection]: [...items] }));
+                setSettingsOrderDirty(prev => ({ ...prev, [collection]: false }));
+                setSettingsOrderEditing(prev => ({ ...prev, [collection]: false }));
+            };
+
+            const startSettingsDrag = (event, collection, itemId) => {
+                if (
+                    isProcessing ||
+                    !settingsOrderEditing[collection] ||
+                    !['categories', 'expenseItems'].includes(collection)
+                ) return;
                 event.preventDefault();
                 try { event.currentTarget.setPointerCapture(event.pointerId); } catch (error) {}
                 settingsDragRef.current = {
@@ -2357,10 +2386,10 @@
 
             const moveSettingsDrag = (event) => {
                 const drag = settingsDragRef.current;
-                if (!drag || drag.pointerId !== event.pointerId) return;
+                if (!drag || drag.pointerId !== event.pointerId || !settingsOrderEditing[drag.collection]) return;
                 event.preventDefault();
 
-                // 手指需先移動一小段距離才開始排序，降低 iPhone 誤觸。
+                // 手指需先移動一小段距離才開始排序，降低 iPhone 點按時的誤觸。
                 if (!drag.activated) {
                     if (Math.abs(event.clientY - drag.startY) < 7) return;
                     drag.activated = true;
@@ -2404,14 +2433,18 @@
                 if (!drag) return;
                 if (event?.pointerId !== undefined && drag.pointerId !== event.pointerId) return;
                 try { event?.currentTarget?.releasePointerCapture?.(drag.pointerId); } catch (error) {}
-                settingsDragRef.current = null;
-                setSettingsDragging(null);
-                document.body.style.userSelect = '';
-                document.body.style.webkitUserSelect = '';
+                resetSettingsDragState();
             };
 
             const saveSettingsOrder = async (collection) => {
-                if (isProcessing || !settingsOrderDirty[collection]) return;
+                if (isProcessing || !settingsOrderEditing[collection]) return;
+
+                // 沒有移動時直接離開排序模式，不執行 Firebase 寫入。
+                if (!settingsOrderDirty[collection]) {
+                    setSettingsOrderEditing(prev => ({ ...prev, [collection]: false }));
+                    return;
+                }
+
                 const orderedItems = settingsDraftOrders[collection] || [];
                 setIsProcessing(true);
                 try {
@@ -2423,6 +2456,7 @@
                     });
                     await batch.commit();
                     setSettingsOrderDirty(prev => ({ ...prev, [collection]: false }));
+                    setSettingsOrderEditing(prev => ({ ...prev, [collection]: false }));
                 } catch (error) {
                     console.error(`儲存${collection}排序失敗:`, error);
                     alert('儲存排序失敗，請檢查網路後再試一次。');
@@ -2435,6 +2469,7 @@
             const renderSettingsList = (title, collection, items, allowReorder = false) => {
                 const displayItems = getSettingsDisplayItems(collection, items, allowReorder);
                 const isDirty = Boolean(allowReorder && settingsOrderDirty[collection]);
+                const isOrderEditing = Boolean(allowReorder && settingsOrderEditing[collection]);
 
                 return (
                     <div className="mb-8">
@@ -2444,25 +2479,47 @@
                                     <h3 className="font-black text-xl">{title}</h3>
                                     {isDirty && <span className="tag bg-[var(--pastel-yellow)] text-[var(--text-yellow)] !text-[11px]">尚未儲存</span>}
                                 </div>
-                                {allowReorder && <div className="text-[11px] font-bold text-gray-400 mt-1">按住拖曳把手調整順序</div>}
                             </div>
                             <div className="flex items-center gap-2 shrink-0">
-                                {allowReorder && (
+                                {allowReorder && !isOrderEditing && (
                                     <button
                                         type="button"
-                                        disabled={!isDirty || isProcessing}
-                                        onClick={()=>saveSettingsOrder(collection)}
-                                        className="bubble-btn btn-mint !py-1.5 !px-3 !text-[12px] disabled:opacity-40"
+                                        disabled={isProcessing}
+                                        onClick={()=>beginSettingsOrderEdit(collection, items)}
+                                        className="bubble-btn btn-outline !py-1.5 !px-3 !text-[12px] disabled:opacity-40"
                                     >
-                                        <Icon name={isProcessing && isDirty ? "loader-circle" : "save"} size={15} className={isProcessing && isDirty ? "animate-spin" : ""}/>
-                                        儲存排序
+                                        <Icon name="arrow-up-down" size={15}/>
+                                        調整排序
                                     </button>
                                 )}
-                                <button onClick={()=>showInput(`新增${title}`, '', '請輸入名稱...', async (newName) => {
-                                    const list = collection === 'members' ? members : collection === 'categories' ? categories : expenseItems;
-                                    const nextOrder = list.length > 0 ? Math.max(...list.map(l => l.order || 0)) + 1 : 0;
-                                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection(collection).add({ name: newName, order: nextOrder, createdAt: new Date().toISOString() });
-                                })} className="bubble-btn btn-primary !py-1.5 !px-3 !text-[12px]"><Icon name="plus" size={15}/> 新增</button>
+                                {allowReorder && isOrderEditing && (
+                                    <>
+                                        <button
+                                            type="button"
+                                            disabled={isProcessing}
+                                            onClick={()=>cancelSettingsOrderEdit(collection, items)}
+                                            className="bubble-btn btn-outline !py-1.5 !px-3 !text-[12px] disabled:opacity-40"
+                                        >
+                                            取消
+                                        </button>
+                                        <button
+                                            type="button"
+                                            disabled={isProcessing}
+                                            onClick={()=>saveSettingsOrder(collection)}
+                                            className="bubble-btn btn-mint !py-1.5 !px-3 !text-[12px] disabled:opacity-40"
+                                        >
+                                            <Icon name={isProcessing ? "loader-circle" : "save"} size={15} className={isProcessing ? "animate-spin" : ""}/>
+                                            儲存
+                                        </button>
+                                    </>
+                                )}
+                                {!isOrderEditing && (
+                                    <button disabled={isProcessing} onClick={()=>showInput(`新增${title}`, '', '請輸入名稱...', async (newName) => {
+                                        const list = collection === 'members' ? members : collection === 'categories' ? categories : expenseItems;
+                                        const nextOrder = list.length > 0 ? Math.max(...list.map(l => l.order || 0)) + 1 : 0;
+                                        await db.collection('artifacts').doc(appId).collection('public').doc('data').collection(collection).add({ name: newName, order: nextOrder, createdAt: new Date().toISOString() });
+                                    })} className="bubble-btn btn-primary !py-1.5 !px-3 !text-[12px] disabled:opacity-40"><Icon name="plus" size={15}/> 新增</button>
+                                )}
                             </div>
                         </div>
                         <div
@@ -2470,7 +2527,7 @@
                             className="bubble-card bg-white overflow-hidden divide-y divide-gray-50 p-0"
                         >
                             {displayItems.length === 0 && <div className="p-6 text-center font-bold text-gray-400">無資料</div>}
-                            {displayItems.map(item => {
+                            {displayItems.map((item, index) => {
                                 const isDragging = settingsDragging?.collection === collection && settingsDragging?.itemId === item.id;
                                 return (
                                     <div
@@ -2479,7 +2536,7 @@
                                         className={`flex justify-between items-center gap-2 p-3 transition-all ${isDragging ? 'relative z-10 bg-[var(--pastel-yellow)]/55 shadow-xl scale-[1.01]' : 'hover:bg-[var(--bubble-bg)]/30'}`}
                                     >
                                         <div className="flex items-center gap-2 min-w-0 flex-1">
-                                            {allowReorder && (
+                                            {isOrderEditing && (
                                                 <button
                                                     type="button"
                                                     aria-label={`拖曳調整「${item.name}」排序`}
@@ -2497,14 +2554,18 @@
                                             )}
                                             <span className="font-black text-[16px] min-w-0 break-words">{item.name}</span>
                                         </div>
-                                        <div className="flex gap-1.5 shrink-0">
-                                            <button disabled={isProcessing} onClick={()=>showInput(`編輯名稱`, item.name, '輸入新名稱', async (newName) => {
-                                                await db.collection('artifacts').doc(appId).collection('public').doc('data').collection(collection).doc(item.id).update({ name: newName });
-                                            })} className="p-2 rounded-xl text-[var(--text-blue)] bg-[var(--pastel-blue)]/20 hover:bg-[var(--pastel-blue)] transition-all disabled:opacity-40"><Icon name="edit-2" size={18}/></button>
-                                            <button disabled={isProcessing} onClick={()=>showConfirm('確認刪除', `確定要刪除「${item.name}」嗎？`, async () => {
-                                                await db.collection('artifacts').doc(appId).collection('public').doc('data').collection(collection).doc(item.id).delete();
-                                            })} className="p-2 rounded-xl text-[var(--text-orange)] bg-[var(--pastel-orange)]/20 hover:bg-[var(--pastel-orange)] transition-all disabled:opacity-40"><Icon name="trash-2" size={18}/></button>
-                                        </div>
+                                        {isOrderEditing ? (
+                                            <span className="w-7 text-center text-[12px] font-black text-gray-300 shrink-0">{index + 1}</span>
+                                        ) : (
+                                            <div className="flex gap-1.5 shrink-0">
+                                                <button disabled={isProcessing} onClick={()=>showInput(`編輯名稱`, item.name, '輸入新名稱', async (newName) => {
+                                                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection(collection).doc(item.id).update({ name: newName });
+                                                })} className="p-2 rounded-xl text-[var(--text-blue)] bg-[var(--pastel-blue)]/20 hover:bg-[var(--pastel-blue)] transition-all disabled:opacity-40"><Icon name="edit-2" size={18}/></button>
+                                                <button disabled={isProcessing} onClick={()=>showConfirm('確認刪除', `確定要刪除「${item.name}」嗎？`, async () => {
+                                                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection(collection).doc(item.id).delete();
+                                                })} className="p-2 rounded-xl text-[var(--text-orange)] bg-[var(--pastel-orange)]/20 hover:bg-[var(--pastel-orange)] transition-all disabled:opacity-40"><Icon name="trash-2" size={18}/></button>
+                                            </div>
+                                        )}
                                     </div>
                                 );
                             })}
@@ -2582,15 +2643,25 @@
                                 
                                 <div className="mb-8 pt-4">
                                     <h3 className="font-black text-xl px-2 mb-4">資料備份與匯出</h3>
-                                    <div className="bubble-card bg-white p-5 space-y-4">
-                                        <p className="text-xs font-bold text-gray-500 mb-2 leading-relaxed">日常記帳欄位「日期、金額、費用分類、備註、成員」<br/>專案欄位「專案名稱、專案類別、參與成員、起始日期、結束日期、專案備註、專案費用日期、專案費用金額、專案費用分類、專案費用備註」</p>
-                                        <div className="bg-[var(--bubble-bg)]/70 rounded-[20px] p-4 space-y-3">
-                                            <div className="font-black text-sm text-[var(--text-blue)] flex items-center gap-2"><Icon name="wallet" size={16}/> 日常記帳 CSV</div>
-                                            <button onClick={handleExportDailyCSV} className="bubble-btn btn-outline w-full !text-sm"><Icon name="download" size={16}/> 匯出目前日常</button>
-                                        </div>
-                                        <div className="bg-[var(--bubble-bg)]/70 rounded-[20px] p-4 space-y-3">
-                                            <div className="font-black text-sm text-[var(--text-mint)] flex items-center gap-2"><Icon name="folder" size={16}/> 專案資料 CSV</div>
-                                            <button onClick={handleExportProjectCSV} className="bubble-btn btn-outline w-full !text-sm"><Icon name="download" size={16}/> 匯出專案</button>
+                                    <div className="bubble-card bg-white p-5">
+                                        <p className="text-xs font-bold text-gray-500 mb-4 leading-relaxed">日常記帳匯出目前畫面中的查詢結果；專案資料則匯出完整專案內容。</p>
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <button
+                                                onClick={handleExportDailyCSV}
+                                                className="min-w-0 min-h-[118px] rounded-[22px] border-2 border-[var(--pastel-blue)]/55 bg-[var(--pastel-blue)]/15 px-3 py-4 flex flex-col items-center justify-center gap-2 text-center active:scale-[0.97] transition-transform"
+                                            >
+                                                <span className="w-11 h-11 rounded-2xl bg-white/80 shadow-sm flex items-center justify-center text-[var(--text-blue)]"><Icon name="wallet" size={22}/></span>
+                                                <span className="font-black text-[14px] leading-tight text-[var(--text-blue)]">日常記帳</span>
+                                                <span className="font-bold text-[11px] text-[var(--bubble-text)]/45 flex items-center gap-1"><Icon name="download" size={12}/> 匯出 CSV</span>
+                                            </button>
+                                            <button
+                                                onClick={handleExportProjectCSV}
+                                                className="min-w-0 min-h-[118px] rounded-[22px] border-2 border-[var(--pastel-mint)]/70 bg-[var(--pastel-mint)]/20 px-3 py-4 flex flex-col items-center justify-center gap-2 text-center active:scale-[0.97] transition-transform"
+                                            >
+                                                <span className="w-11 h-11 rounded-2xl bg-white/80 shadow-sm flex items-center justify-center text-[var(--text-mint)]"><Icon name="folder" size={22}/></span>
+                                                <span className="font-black text-[14px] leading-tight text-[var(--text-mint)]">專案資料</span>
+                                                <span className="font-bold text-[11px] text-[var(--bubble-text)]/45 flex items-center gap-1"><Icon name="download" size={12}/> 匯出 CSV</span>
+                                            </button>
                                         </div>
                                     </div>
                                 </div>
