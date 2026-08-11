@@ -404,6 +404,18 @@
             return range.start <= rangeEnd && range.end >= rangeStart;
         };
 
+        // 記帳選專案使用：只要記帳日期落在專案起訖期間內即可。
+        // 若只有起日，視為自起日起持續；若只有迄日，視為迄日前皆可補登。
+        const projectIncludesExpenseDate = (project, dateStr) => {
+            if (!dateStr) return false;
+            const start = normalizeProjectDate(project.startDate);
+            const end = normalizeProjectDate(project.endDate);
+            if (!start && !end) return false;
+            if (start && dateStr < start) return false;
+            if (end && dateStr > end) return false;
+            return true;
+        };
+
         const projectMatchesYearMonth = (project, yearFilter, monthFilter) => {
             if (yearFilter === 'all' && monthFilter === 'all') return true;
             const range = getProjectDateRange(project);
@@ -431,11 +443,14 @@
         };
 
         const LAST_DAILY_OWNER_KEY = 'etWorkspaceLastDailyOwner';
+        const LAST_DAILY_PROJECT_KEY = 'etWorkspaceLastDailyProjectByDate';
         const DAILY_COMBO_OWNER = 'Terry； Eric';
         const normalizeDailyOwnerOption = (owner) => {
             const text = String(owner || '').trim();
             return text === 'Terry;Eric' ? DAILY_COMBO_OWNER : text;
         };
+
+        const buildOwnerLabel = (owners = []) => owners.filter(Boolean).join('； ');
         const getSavedDailyOwner = () => {
             try { return normalizeDailyOwnerOption(localStorage.getItem(LAST_DAILY_OWNER_KEY) || ''); }
             catch (e) { return ''; }
@@ -446,6 +461,37 @@
                 if (normalized) localStorage.setItem(LAST_DAILY_OWNER_KEY, normalized);
             }
             catch (e) {}
+        };
+
+        // 只記住「今天最後一筆成功儲存」的專案；跨日自動失效。
+        // projectId 可為空字串，代表上一筆是「無專案」。
+        const getSavedDailyProjectForDate = (date) => {
+            const today = getLocalDateString();
+            if (!date || date !== today) return '';
+            try {
+                const raw = localStorage.getItem(LAST_DAILY_PROJECT_KEY);
+                if (!raw) return '';
+                const saved = JSON.parse(raw);
+                if (!saved || saved.date !== today) {
+                    localStorage.removeItem(LAST_DAILY_PROJECT_KEY);
+                    return '';
+                }
+                return String(saved.projectId || '');
+            } catch (e) {
+                try { localStorage.removeItem(LAST_DAILY_PROJECT_KEY); } catch (_) {}
+                return '';
+            }
+        };
+
+        const saveDailyProjectForDate = (date, projectId) => {
+            const today = getLocalDateString();
+            if (!date || date !== today) return;
+            try {
+                localStorage.setItem(LAST_DAILY_PROJECT_KEY, JSON.stringify({
+                    date: today,
+                    projectId: String(projectId || '')
+                }));
+            } catch (e) {}
         };
 
         const Icon = ({ name, size = 20, className = "" }) => {
@@ -521,10 +567,10 @@
             
             // --- Filter & Sort States ---
             const [dailySort, setDailySort] = useState('desc'); 
-            // 日常流水帳預設只載入本月；使用者需要其他期間時，再從查詢面板調整日期。
+            // 日常流水帳畫面預設顯示本月；完整消費資料由統一資料源同步，再依查詢條件於前端篩選。
             const getDefaultDailyQuery = () => {
                 const range = getMonthDateRange(getCurrentMonthString());
-                return { start: range.start, end: range.end, item: 'all', owner: 'all', note: '' };
+                return { start: range.start, end: range.end, item: 'all', owner: 'all', project: 'all', note: '' };
             };
             const [dailyQuery, setDailyQuery] = useState(() => getDefaultDailyQuery());
             const [dailyQueryDraft, setDailyQueryDraft] = useState(() => getDefaultDailyQuery());
@@ -547,11 +593,13 @@
             const [analyticsEnd, setAnalyticsEnd] = useState(initialAnalyticsRange.end);
             const [analyticsCatFilter, setAnalyticsCatFilter] = useState('all');
             const [analyticsOwnerFilter, setAnalyticsOwnerFilter] = useState('all');
+            const [analyticsProjectFilter, setAnalyticsProjectFilter] = useState('all');
             const [analyticsKeyword, setAnalyticsKeyword] = useState('');
             const [analyticsDraftStart, setAnalyticsDraftStart] = useState(initialAnalyticsRange.start);
             const [analyticsDraftEnd, setAnalyticsDraftEnd] = useState(initialAnalyticsRange.end);
             const [analyticsDraftCatFilter, setAnalyticsDraftCatFilter] = useState('all');
             const [analyticsDraftOwnerFilter, setAnalyticsDraftOwnerFilter] = useState('all');
+            const [analyticsDraftProjectFilter, setAnalyticsDraftProjectFilter] = useState('all');
             const [analyticsDraftKeyword, setAnalyticsDraftKeyword] = useState('');
             const [analyticsListSort, setAnalyticsListSort] = useState('desc');
             const [isAnalyticsFilterOpen, setIsAnalyticsFilterOpen] = useState(true);
@@ -575,6 +623,7 @@
             const [dailyItem, setDailyItem] = useState('');
             const [dailyDesc, setDailyDesc] = useState('');
             const [dailyOwner, setDailyOwner] = useState(() => getSavedDailyOwner());
+            const [dailyProjectId, setDailyProjectId] = useState(() => getSavedDailyProjectForDate(getLocalDateString()));
             
             // Daily Edit Modal State (取代跳至頂部的設計)
             const [dailyEditData, setDailyEditData] = useState(null);
@@ -598,14 +647,8 @@
 
             // Project Detail
             const [expandedProject, setExpandedProject] = useState({});
-            const [expenseModalProject, setExpenseModalProject] = useState(null);
-            
-            // Project Single Expense
-            const [projExpDate, setProjExpDate] = useState(getLocalDateString());
-            const [projExpAmount, setProjExpAmount] = useState('');
-            const [projExpItem, setProjExpItem] = useState('');
-            const [projExpDesc, setProjExpDesc] = useState('');
-            const [projExpEditingIdx, setProjExpEditingIdx] = useState(null);
+            // 舊版專案費用移轉防重入：V32 起所有消費統一存 dailyExpenses。
+            const legacyExpenseMigrationRef = useRef(false);
             
             // Project Checklist State 
             const [newChecklistText, setNewChecklistText] = useState({});
@@ -633,6 +676,29 @@
                     ? [...names, DAILY_COMBO_OWNER]
                     : names;
             }, [members]);
+
+
+            const availableProjectsForDailyDate = useMemo(() => projects
+                .filter(project => projectIncludesExpenseDate(project, dailyDate))
+                .sort((a, b) => (a.startDate || '').localeCompare(b.startDate || '') || (a.text || '').localeCompare(b.text || '')),
+            [projects, dailyDate]);
+
+            const projectExpenseMap = useMemo(() => {
+                const map = {};
+                dailyExpenses.forEach(expense => {
+                    if (!expense.projectId) return;
+                    if (!map[expense.projectId]) map[expense.projectId] = [];
+                    map[expense.projectId].push(expense);
+                });
+                Object.values(map).forEach(list => list.sort((a, b) => (b.date || '').localeCompare(a.date || '')));
+                return map;
+            }, [dailyExpenses]);
+
+            const getProjectExpenses = (projectId) => projectExpenseMap[projectId] || [];
+            const getExpenseProjectName = (expense) => {
+                if (!expense?.projectId) return '';
+                return projects.find(project => project.id === expense.projectId)?.text || expense.projectName || '';
+            };
 
             const mergeSettingsDraftWithSource = (draftItems, sourceItems) => {
                 const sourceMap = new Map((sourceItems || []).map(item => [item.id, item]));
@@ -674,6 +740,14 @@
                 const owner = e.target.value;
                 setDailyOwner(owner);
                 saveDailyOwner(owner);
+            };
+
+            const handleDailyDateChange = (e) => {
+                const nextDate = e.target.value;
+                setDailyDate(nextDate);
+                // 只有切回今天時，才恢復今天上一筆成功儲存的專案。
+                // 查詢／補登其他日期時不沿用，避免誤歸類。
+                setDailyProjectId(nextDate === getLocalDateString() ? getSavedDailyProjectForDate(nextDate) : '');
             };
 
             const normalizeEmail = (email) => String(email || '').trim().toLowerCase();
@@ -983,30 +1057,33 @@
             useEffect(() => {
                 if (!user || !isAllowedEmail(getFirebaseUserEmail(user))) return;
                 const path = db.collection('artifacts').doc(appId).collection('public').doc('data');
-                let query = path.collection('dailyExpenses');
 
-                // 日常資料預設查詢本月；需要其他期間時，由日常查詢面板改變日期範圍。
-                if (dailyQuery.start) query = query.where('date', '>=', dailyQuery.start);
-                if (dailyQuery.end) query = query.where('date', '<', getNextDateString(dailyQuery.end));
-
+                // V32：dailyExpenses 成為唯一消費資料來源。
+                // 一次同步完整消費資料；日常、專案、統計僅在前端依日期/條件顯示，避免同一筆費用存在兩套資料。
                 setIsDailyLoading(true);
                 setLoadedSources(prev => ({ ...prev, daily: false }));
 
-                const unsubDaily = query.onSnapshot(
+                const unsubDaily = path.collection('dailyExpenses').onSnapshot(
                     snap => {
-                        setDailyExpenses(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+                        const allExpenses = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                        setDailyExpenses(allExpenses);
+                        setAnalyticsDailyExpenses(allExpenses);
                         setIsDailyLoading(false);
+                        setIsAnalyticsLoading(false);
                         markSourceLoaded('daily');
                     },
                     err => {
-                        console.error('讀取日常記帳失敗:', err);
+                        console.error('讀取消費資料失敗:', err);
+                        setDailyExpenses([]);
+                        setAnalyticsDailyExpenses([]);
                         setIsDailyLoading(false);
+                        setIsAnalyticsLoading(false);
                         markSourceLoaded('daily');
                     }
                 );
 
                 return () => unsubDaily();
-            }, [user, dailyQuery]);
+            }, [user]);
 
             useEffect(() => {
                 if (!user || !isAllowedEmail(getFirebaseUserEmail(user))) return;
@@ -1041,30 +1118,72 @@
             }, [dailyOwnerOptions]);
 
             useEffect(() => {
-                if (!user || !isAllowedEmail(getFirebaseUserEmail(user)) || activeTab !== 'analytics') return;
-                if (analyticsStart && analyticsEnd && analyticsEnd < analyticsStart) return;
+                if (!loadedSources.projects || !dailyProjectId) return;
+                const selectedProject = projects.find(project => project.id === dailyProjectId);
+                if (!selectedProject || !projectIncludesExpenseDate(selectedProject, dailyDate)) {
+                    setDailyProjectId('');
+                    // 若今天記住的專案已刪除、停用日期不符等，同步清掉失效記憶。
+                    if (dailyDate === getLocalDateString()) saveDailyProjectForDate(dailyDate, '');
+                }
+            }, [dailyDate, dailyProjectId, projects, loadedSources.projects]);
 
-                const path = db.collection('artifacts').doc(appId).collection('public').doc('data');
-                let query = path.collection('dailyExpenses');
+            useEffect(() => {
+                if (!user || !isAllowedEmail(getFirebaseUserEmail(user)) || legacyExpenseMigrationRef.current) return;
+                const legacyProjects = projects.filter(project => Array.isArray(project.expenses) && project.expenses.length > 0);
+                if (legacyProjects.length === 0) return;
 
-                if (analyticsStart) query = query.where('date', '>=', analyticsStart);
-                if (analyticsEnd) query = query.where('date', '<', getNextDateString(analyticsEnd));
+                legacyExpenseMigrationRef.current = true;
+                const migrateLegacyProjectExpenses = async () => {
+                    const path = db.collection('artifacts').doc(appId).collection('public').doc('data');
+                    try {
+                        for (const project of legacyProjects) {
+                            const legacyExpenses = [...(project.expenses || [])];
+                            const projectOwners = project.owners && project.owners.length > 0
+                                ? project.owners.filter(Boolean)
+                                : (project.owner ? [project.owner] : []);
+                            const ownerLabel = buildOwnerLabel(projectOwners);
 
-                setIsAnalyticsLoading(true);
-                const unsubAnalyticsDaily = query.onSnapshot(
-                    snap => {
-                        setAnalyticsDailyExpenses(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-                        setIsAnalyticsLoading(false);
-                    },
-                    err => {
-                        console.error('讀取統計用日常資料失敗:', err);
-                        setAnalyticsDailyExpenses([]);
-                        setIsAnalyticsLoading(false);
+                            // 使用固定文件 ID，若網路中斷重跑也不會重複建立同一筆舊資料。
+                            for (let idx = 0; idx < legacyExpenses.length; idx++) {
+                                const expense = legacyExpenses[idx] || {};
+                                const migratedId = `legacy_${project.id}_${idx}`;
+                                await path.collection('dailyExpenses').doc(migratedId).set({
+                                    date: expense.date || project.startDate || project.endDate || getLocalDateString(),
+                                    amount: parseFloat(expense.amount) || 0,
+                                    item: expense.item || '',
+                                    desc: expense.desc || '',
+                                    owner: ownerLabel,
+                                    projectId: project.id,
+                                    projectName: project.text || '',
+                                    legacyProjectExpense: true,
+                                    allocationOwners: projectOwners,
+                                    migratedFrom: 'project.expenses',
+                                    migratedAt: new Date().toISOString(),
+                                    updatedAt: new Date().toISOString(),
+                                    createdAt: expense.createdAt || new Date().toISOString()
+                                }, { merge: true });
+                            }
+
+                            // 保留一份唯讀備份供必要時追溯，正式畫面與計算不再讀取舊 expenses 欄位。
+                            await path.collection('tasks').doc(project.id).update({
+                                legacyExpensesBackup: legacyExpenses,
+                                expenses: [],
+                                expenseMigrationVersion: 1,
+                                expenseMigratedAt: new Date().toISOString()
+                            });
+                        }
+                        console.info('舊專案費用已合併至統一記帳資料。');
+                    } catch (error) {
+                        console.error('舊專案費用合併失敗，系統會在下次載入時安全重試:', error);
+                    } finally {
+                        legacyExpenseMigrationRef.current = false;
                     }
-                );
+                };
+                migrateLegacyProjectExpenses();
+            }, [user, projects]);
 
-                return () => unsubAnalyticsDaily();
-            }, [user, activeTab, analyticsStart, analyticsEnd]);
+            // 統計直接使用同一份 dailyExpenses；只有按「套用」才改變 analytics* 條件並重算圖表。
+
 
             const showConfirm = (title, message, onConfirm) => setConfirmDialog({ isOpen: true, title, message, onConfirm });
             const showInput = (title, defaultValue, placeholder, onConfirm) => setInputDialog({ isOpen: true, title, value: defaultValue, placeholder, onConfirm });
@@ -1075,13 +1194,32 @@
                 if (!dailyAmount || !dailyItem || isProcessing) return;
                 setIsProcessing(true);
                 try {
+                    const selectedProject = projects.find(project => project.id === dailyProjectId);
                     const data = {
-                        date: dailyDate, amount: parseFloat(dailyAmount), item: dailyItem, desc: dailyDesc, owner: dailyOwner, updatedAt: new Date().toISOString(), createdAt: new Date().toISOString()
+                        date: dailyDate,
+                        amount: parseFloat(dailyAmount),
+                        item: dailyItem,
+                        desc: dailyDesc,
+                        owner: dailyOwner,
+                        projectId: selectedProject?.id || '',
+                        projectName: selectedProject?.text || '',
+                        updatedAt: new Date().toISOString(),
+                        createdAt: new Date().toISOString()
                     };
                     await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('dailyExpenses').add(data);
                     saveDailyOwner(dailyOwner);
-                    setDailyDate(getLocalDateString());
-                    setDailyAmount(''); setDailyDesc('');
+
+                    const today = getLocalDateString();
+                    const savedProjectId = selectedProject?.id || '';
+                    if (dailyDate === today) saveDailyProjectForDate(today, savedProjectId);
+
+                    // 儲存後回到今天：今天的連續記帳沿用上一筆成功儲存的專案；
+                    // 若剛才是補登其他日期，則恢復今天原本記住的專案。
+                    setDailyDate(today);
+                    setDailyAmount('');
+                    setDailyItem('');
+                    setDailyDesc('');
+                    setDailyProjectId(dailyDate === today ? savedProjectId : getSavedDailyProjectForDate(today));
                 } catch (err) {
                     console.error('新增日常記帳失敗:', err);
                     alert('新增日常記帳失敗，請檢查網路後再試一次。');
@@ -1094,8 +1232,16 @@
                 if (!dailyEditData.amount || !dailyEditData.item || isProcessing) return;
                 setIsProcessing(true);
                 try {
+                    const selectedProject = projects.find(project => project.id === dailyEditData.projectId);
                     await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('dailyExpenses').doc(dailyEditData.id).update({
-                        date: dailyEditData.date, amount: parseFloat(dailyEditData.amount), item: dailyEditData.item, desc: dailyEditData.desc, owner: dailyEditData.owner, updatedAt: new Date().toISOString()
+                        date: dailyEditData.date,
+                        amount: parseFloat(dailyEditData.amount),
+                        item: dailyEditData.item,
+                        desc: dailyEditData.desc,
+                        owner: dailyEditData.owner,
+                        projectId: selectedProject?.id || '',
+                        projectName: selectedProject?.text || '',
+                        updatedAt: new Date().toISOString()
                     });
                     setDailyEditData(null);
                 } catch (err) {
@@ -1225,58 +1371,17 @@
                 setIsProjectFormOpen(true);
             };
 
-            const openExpenseModal = (t, idx = null) => {
-                setExpenseModalProject(t);
-                if (idx !== null && t.expenses && t.expenses[idx]) {
-                    const exp = t.expenses[idx];
-                    setProjExpDate(exp.date);
-                    setProjExpAmount(exp.amount);
-                    setProjExpItem(exp.item);
-                    setProjExpDesc(exp.desc || '');
-                    setProjExpEditingIdx(idx);
-                } else {
-                    setProjExpDate(getLocalDateString());
-                    setProjExpAmount(''); 
-                    setProjExpItem(''); 
-                    setProjExpDesc('');
-                    setProjExpEditingIdx(null);
-                }
+            const startDailyExpenseForProject = (project) => {
+                const today = getLocalDateString();
+                const suggestedDate = projectIncludesExpenseDate(project, today)
+                    ? today
+                    : (normalizeProjectDate(project.startDate || project.endDate) || today);
+                setDailyDate(suggestedDate);
+                setDailyProjectId(project.id);
+                setActiveTab('daily');
+                window.setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 50);
             };
 
-            const submitProjectExpense = async (e) => {
-                e.preventDefault();
-                if (!projExpAmount || !projExpItem || isProcessing) return;
-                setIsProcessing(true);
-                try {
-                    const newExp = { date: projExpDate, amount: parseFloat(projExpAmount) || 0, item: projExpItem, desc: projExpDesc };
-                    const currentProject = projects.find(t => t.id === expenseModalProject.id);
-                    let updatedExpenses = [...(currentProject.expenses || [])];
-                    if (projExpEditingIdx !== null) {
-                        updatedExpenses[projExpEditingIdx] = newExp;
-                    } else {
-                        updatedExpenses.push(newExp);
-                    }
-                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('tasks').doc(currentProject.id).update({ expenses: updatedExpenses });
-                    setExpenseModalProject(null);
-                    setProjExpEditingIdx(null);
-                } catch(err) {
-                    console.error('儲存專案費用失敗:', err);
-                    alert('儲存專案費用失敗，請檢查網路後再試一次。');
-                }
-                setIsProcessing(false);
-            };
-            
-            const deleteProjectExpense = async (project, expenseIndex) => {
-                try {
-                    const updatedExpenses = [...(project.expenses || [])];
-                    updatedExpenses.splice(expenseIndex, 1);
-                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('tasks').doc(project.id).update({ expenses: updatedExpenses });
-                } catch (err) {
-                    console.error('刪除專案費用失敗:', err);
-                    alert('刪除專案費用失敗，請檢查網路後再試一次。');
-                }
-            };
-            
             const addChecklistItem = async (projectId) => {
                 const text = newChecklistText[projectId]?.trim();
                 if(!text) return;
@@ -1410,7 +1515,7 @@
                 setChecklistAttachmentImages(prev => prev.filter((_, i) => i !== idx));
             };
 
-            const calculateProjectTotal = (t) => (t.expenses || []).reduce((s, i) => s + (parseFloat(i.amount) || 0), 0);
+            const calculateProjectTotal = (t) => getProjectExpenses(t.id).reduce((sum, expense) => sum + (parseFloat(expense.amount) || 0), 0);
 
             const collapseProject = (taskId) => {
                 setExpandedProject(prev => {
@@ -1490,11 +1595,11 @@
             };
 
             const handleExportDailyCSV = () => {
-                const rows = displayDaily.map(d => [d.date || '', d.amount || 0, d.item || '', d.desc || '', d.owner || '']);
+                const rows = displayDaily.map(d => [d.date || '', d.amount || 0, d.item || '', d.desc || '', d.owner || '', getExpenseProjectName(d)]);
                 const rangeLabel = dailyQuery.start || dailyQuery.end
                     ? `${dailyQuery.start || 'Start'}_${dailyQuery.end || 'End'}`
                     : 'All';
-                downloadCSV(`TE_LifeLog_Daily_Expenses_${rangeLabel}.csv`, ["日期", "金額", "費用分類", "備註", "成員"], rows);
+                downloadCSV(`TE_LifeLog_Daily_Expenses_${rangeLabel}.csv`, ["日期", "金額", "費用分類", "備註", "成員", "專案"], rows);
             };
 
             const handleExportProjectCSV = () => {
@@ -1508,16 +1613,16 @@
                         t.endDate || '',
                         t.note || ''
                     ];
-                    const projectExpenses = t.expenses || [];
+                    const projectExpenses = getProjectExpenses(t.id);
                     if (projectExpenses.length > 0) {
                         projectExpenses.forEach(e => {
-                            rows.push([...base, e.date || '', e.amount || 0, e.item || '', e.desc || '']);
+                            rows.push([...base, e.date || '', e.amount || 0, e.item || '', e.desc || '', e.owner || '']);
                         });
                     } else {
-                        rows.push([...base, '', '', '', '']);
+                        rows.push([...base, '', '', '', '', '']);
                     }
                 });
-                downloadCSV("TE_LifeLog_Projects.csv", ["專案名稱", "專案類別", "參與成員", "起始日期", "結束日期", "專案備註", "專案費用日期", "專案費用金額", "專案費用分類", "專案費用備註"], rows);
+                downloadCSV("TE_LifeLog_Projects.csv", ["專案名稱", "專案類別", "參與成員", "起始日期", "結束日期", "專案備註", "專案費用日期", "專案費用金額", "專案費用分類", "專案費用備註", "費用成員"], rows);
             };
 
 
@@ -1528,6 +1633,7 @@
                     dailyQuery.end !== defaultQuery.end ||
                     dailyQuery.item !== 'all' ||
                     dailyQuery.owner !== 'all' ||
+                    dailyQuery.project !== 'all' ||
                     dailyQuery.note.trim()
                 );
             }, [dailyQuery]);
@@ -1569,6 +1675,7 @@
                 setAnalyticsEnd(analyticsDraftEnd);
                 setAnalyticsCatFilter(analyticsDraftCatFilter);
                 setAnalyticsOwnerFilter(analyticsDraftOwnerFilter);
+                setAnalyticsProjectFilter(analyticsDraftProjectFilter);
                 setAnalyticsKeyword(analyticsDraftKeyword.trim());
                 setIsAnalyticsFilterOpen(false);
             };
@@ -1580,11 +1687,13 @@
                 setAnalyticsDraftEnd(currentMonthRange.end);
                 setAnalyticsDraftCatFilter('all');
                 setAnalyticsDraftOwnerFilter('all');
+                setAnalyticsDraftProjectFilter('all');
                 setAnalyticsDraftKeyword('');
                 setAnalyticsStart(currentMonthRange.start);
                 setAnalyticsEnd(currentMonthRange.end);
                 setAnalyticsCatFilter('all');
                 setAnalyticsOwnerFilter('all');
+                setAnalyticsProjectFilter('all');
                 setAnalyticsKeyword('');
                 setIsAnalyticsFilterOpen(false);
             };
@@ -1595,9 +1704,10 @@
                     (!dailyQuery.start && !dailyQuery.end) ? 'All' : formatQueryDateSummary(dailyQuery.start, dailyQuery.end),
                     dailyQuery.item !== 'all' ? dailyQuery.item : '',
                     dailyQuery.owner !== 'all' ? dailyQuery.owner : '',
+                    dailyQuery.project !== 'all' ? (dailyQuery.project === 'none' ? '無專案' : (projects.find(p => p.id === dailyQuery.project)?.text || '專案')) : '',
                     dailyQuery.note.trim() ? `備註：${dailyQuery.note.trim()}` : ''
                 ].filter(Boolean).join('｜');
-            }, [dailyQuery, hasDailyQuery]);
+            }, [dailyQuery, hasDailyQuery, projects]);
 
             const projectQuerySummary = useMemo(() => {
                 if (!hasProjectQuery) return '';
@@ -1614,13 +1724,13 @@
             // --- 計算與顯示處理 ---
             const displayDaily = useMemo(() => {
                 let filtered = [...dailyExpenses];
-                if (hasDailyQuery) {
-                    if (dailyQuery.start) filtered = filtered.filter(d => (d.date || '') >= dailyQuery.start);
-                    if (dailyQuery.end) filtered = filtered.filter(d => (d.date || '') <= dailyQuery.end);
-                    if (dailyQuery.item !== 'all') filtered = filtered.filter(d => d.item === dailyQuery.item);
-                    if (dailyQuery.owner !== 'all') filtered = filtered.filter(d => normalizeSearchText(d.owner) === normalizeSearchText(dailyQuery.owner));
-                    if (dailyQuery.note.trim()) filtered = filtered.filter(d => containsSearchText(d.desc, dailyQuery.note));
-                }
+                if (dailyQuery.start) filtered = filtered.filter(d => (d.date || '') >= dailyQuery.start);
+                if (dailyQuery.end) filtered = filtered.filter(d => (d.date || '') <= dailyQuery.end);
+                if (dailyQuery.item !== 'all') filtered = filtered.filter(d => d.item === dailyQuery.item);
+                if (dailyQuery.owner !== 'all') filtered = filtered.filter(d => normalizeSearchText(d.owner) === normalizeSearchText(dailyQuery.owner));
+                if (dailyQuery.project === 'none') filtered = filtered.filter(d => !d.projectId);
+                else if (dailyQuery.project !== 'all') filtered = filtered.filter(d => d.projectId === dailyQuery.project);
+                if (dailyQuery.note.trim()) filtered = filtered.filter(d => containsSearchText(d.desc, dailyQuery.note));
                 filtered.sort((a, b) => {
                     const dateA = a.date || ''; const dateB = b.date || '';
                     return dailySort === 'desc' ? dateB.localeCompare(dateA) : dateA.localeCompare(dateB);
@@ -1693,12 +1803,12 @@
                         return currentOwners.includes(normalizeDailyOwnerOption(projectQuery.owner));
                     });
                 }
-                if (projectQuery.expenseItem !== 'all') filtered = filtered.filter(t => (t.expenses || []).some(e => e.item === projectQuery.expenseItem));
+                if (projectQuery.expenseItem !== 'all') filtered = filtered.filter(t => getProjectExpenses(t.id).some(e => e.item === projectQuery.expenseItem));
 
                 const keyword = projectQuery.text.trim();
                 if (keyword) {
                     filtered = filtered.filter(t => {
-                        const expenseNotes = (t.expenses || []).map(e => e.desc || '').join(' ');
+                        const expenseNotes = getProjectExpenses(t.id).map(e => e.desc || '').join(' ');
                         const searchableText = [t.text, t.note, expenseNotes].filter(Boolean).join(' ');
                         return containsSearchText(searchableText, keyword);
                     });
@@ -1709,7 +1819,7 @@
                     return projectSort === 'desc' ? dateB.localeCompare(dateA) : dateA.localeCompare(dateB);
                 });
                 return filtered;
-            }, [projects, projectSubTab, projectSort, selectedCalDate, projectQuery]);
+            }, [projects, projectSubTab, projectSort, selectedCalDate, projectQuery, projectExpenseMap]);
             
             const calDays = useMemo(() => {
                 const year = currentCalMonth.getFullYear();
@@ -1730,55 +1840,57 @@
             const analyticsData = useMemo(() => {
                 const ownerMap = {}; let totalExpense = 0; const trendMap = {}; const catMap = {}; const rows = [];
                 const keyword = analyticsKeyword.trim();
-                const matchesAnalyticsKeyword = (source) => !keyword || containsSearchText(source, keyword);
-                
-                analyticsDailyExpenses.forEach(d => {
-                    if (analyticsStart && d.date < analyticsStart) return;
-                    if (analyticsEnd && d.date > analyticsEnd) return;
-                    if (analyticsCatFilter !== 'all' && d.item !== analyticsCatFilter) return;
-                    if (analyticsOwnerFilter !== 'all' && normalizeSearchText(d.owner) !== normalizeSearchText(analyticsOwnerFilter)) return;
-                    if (!matchesAnalyticsKeyword(d.desc || '')) return;
 
-                    const amt = parseFloat(d.amount) || 0; 
+                analyticsDailyExpenses.forEach(d => {
+                    if (analyticsStart && (d.date || '') < analyticsStart) return;
+                    if (analyticsEnd && (d.date || '') > analyticsEnd) return;
+                    if (analyticsCatFilter !== 'all' && d.item !== analyticsCatFilter) return;
+                    if (analyticsProjectFilter === 'none' && d.projectId) return;
+                    if (analyticsProjectFilter !== 'all' && analyticsProjectFilter !== 'none' && d.projectId !== analyticsProjectFilter) return;
+
+                    const projectName = getExpenseProjectName(d);
+                    if (keyword && !containsSearchText([d.desc, projectName].filter(Boolean).join(' '), keyword)) return;
+
+                    const amt = parseFloat(d.amount) || 0;
+                    const legacyOwners = d.legacyProjectExpense && Array.isArray(d.allocationOwners)
+                        ? d.allocationOwners.filter(Boolean)
+                        : [];
+
+                    // 舊專案費用沿用舊版「依專案參與者平均分攤」的統計邏輯；
+                    // V32 新增的記帳則依記帳時自行選擇的成員計算，避免改變既有歷史統計。
+                    if (legacyOwners.length > 0) {
+                        if (analyticsOwnerFilter !== 'all') {
+                            if (!legacyOwners.includes(analyticsOwnerFilter)) return;
+                            const splitAmount = amt / legacyOwners.length;
+                            totalExpense += splitAmount;
+                            ownerMap[analyticsOwnerFilter] = (ownerMap[analyticsOwnerFilter] || 0) + splitAmount;
+                            catMap[d.item] = (catMap[d.item] || 0) + splitAmount;
+                            const monthKey = d.date ? d.date.substring(0, 7) : 'Unknown';
+                            trendMap[monthKey] = (trendMap[monthKey] || 0) + splitAmount;
+                            rows.push({ source: d.projectId ? '專案' : '日常', date: d.date || '', title: d.desc || '無備註', item: d.item || '', owner: legacyOwners.join('、'), amount: splitAmount, projectName });
+                        } else {
+                            totalExpense += amt;
+                            catMap[d.item] = (catMap[d.item] || 0) + amt;
+                            const monthKey = d.date ? d.date.substring(0, 7) : 'Unknown';
+                            trendMap[monthKey] = (trendMap[monthKey] || 0) + amt;
+                            const splitAmount = amt / legacyOwners.length;
+                            legacyOwners.forEach(owner => { ownerMap[owner] = (ownerMap[owner] || 0) + splitAmount; });
+                            rows.push({ source: d.projectId ? '專案' : '日常', date: d.date || '', title: d.desc || '無備註', item: d.item || '', owner: legacyOwners.join('、'), amount: amt, projectName });
+                        }
+                        return;
+                    }
+
+                    if (analyticsOwnerFilter !== 'all' && normalizeSearchText(d.owner) !== normalizeSearchText(analyticsOwnerFilter)) return;
                     totalExpense += amt;
-                    ownerMap[d.owner] = (ownerMap[d.owner] || 0) + amt;
+                    ownerMap[d.owner || '未指定'] = (ownerMap[d.owner || '未指定'] || 0) + amt;
                     catMap[d.item] = (catMap[d.item] || 0) + amt;
                     const monthKey = d.date ? d.date.substring(0, 7) : 'Unknown';
                     trendMap[monthKey] = (trendMap[monthKey] || 0) + amt;
-                    rows.push({ source: '日常', date: d.date || '', title: d.desc || '無備註', item: d.item || '', owner: d.owner || '', amount: amt, projectName: '' });
-                });
-                
-                projects.forEach(t => {
-                    const currentOwners = t.owners && t.owners.length > 0 ? t.owners : (t.owner ? [t.owner] : []);
-                    if (analyticsOwnerFilter !== 'all' && !currentOwners.includes(analyticsOwnerFilter)) return;
-
-                    (t.expenses || []).forEach(e => {
-                        if (analyticsStart && e.date < analyticsStart) return;
-                        if (analyticsEnd && e.date > analyticsEnd) return;
-                        if (analyticsCatFilter !== 'all' && e.item !== analyticsCatFilter) return;
-                        if (!matchesAnalyticsKeyword([t.text, t.note, e.desc].filter(Boolean).join(' '))) return;
-                        
-                        const amt = parseFloat(e.amount) || 0;
-                        const splitAmount = currentOwners.length > 0 ? amt / currentOwners.length : amt;
-                        const targetAmount = analyticsOwnerFilter !== 'all' ? splitAmount : amt;
-
-                        totalExpense += targetAmount;
-                        catMap[e.item] = (catMap[e.item] || 0) + targetAmount;
-                        const monthKey = e.date ? e.date.substring(0, 7) : 'Unknown';
-                        trendMap[monthKey] = (trendMap[monthKey] || 0) + targetAmount;
-
-                        if (analyticsOwnerFilter !== 'all') {
-                            ownerMap[analyticsOwnerFilter] = (ownerMap[analyticsOwnerFilter] || 0) + splitAmount;
-                        } else {
-                            currentOwners.forEach(o => { ownerMap[o] = (ownerMap[o] || 0) + splitAmount; });
-                        }
-
-                        rows.push({ source: '專案', date: e.date || '', title: e.desc || '無費用備註', item: e.item || '', owner: currentOwners.join('、'), amount: targetAmount, projectName: t.text || '' });
-                    });
+                    rows.push({ source: d.projectId ? '專案' : '日常', date: d.date || '', title: d.desc || '無備註', item: d.item || '', owner: d.owner || '', amount: amt, projectName });
                 });
 
                 return { sortedOwners: Object.entries(ownerMap).sort((a,b)=>b[1]-a[1]), totalExpense, trendKeys: Object.keys(trendMap).sort(), trendMap, catMap, rows };
-            }, [analyticsDailyExpenses, projects, analyticsStart, analyticsEnd, analyticsCatFilter, analyticsOwnerFilter, analyticsKeyword]);
+            }, [analyticsDailyExpenses, projects, analyticsStart, analyticsEnd, analyticsCatFilter, analyticsOwnerFilter, analyticsProjectFilter, analyticsKeyword]);
 
             const sortedAnalyticsRows = useMemo(() => {
                 return [...analyticsData.rows].sort((a, b) => analyticsListSort === 'desc'
@@ -1945,9 +2057,13 @@
                     
                     <form onSubmit={submitDailyExpense} className="bubble-card p-6 space-y-4 bg-white border-2 border-[var(--pastel-blue)]/30">
                         <div className="grid grid-cols-2 gap-3">
-                            <input type="date" value={dailyDate} onChange={e=>setDailyDate(e.target.value)} required className="w-full min-w-0 !max-w-full" />
+                            <input type="date" value={dailyDate} onChange={handleDailyDateChange} required className="w-full min-w-0 !max-w-full" />
                             <input type="number" inputMode="decimal" pattern="[0-9]*" enterKeyHint="done" placeholder="金額 $" value={dailyAmount} onChange={e=>setDailyAmount(e.target.value)} required className="w-full min-w-0 !max-w-full text-xl text-[var(--text-blue)] font-black" />
                         </div>
+                        <select value={dailyProjectId} onChange={e=>setDailyProjectId(e.target.value)} className="w-full min-w-0 !max-w-full">
+                            <option value="">無專案（選填）</option>
+                            {availableProjectsForDailyDate.map(project => <option key={project.id} value={project.id}>{project.text}</option>)}
+                        </select>
                         <div className="grid grid-cols-2 gap-3">
                             <select value={dailyItem} onChange={e=>setDailyItem(e.target.value)} required className="w-full min-w-0 !max-w-full">
                                 <option value="">選擇分類...</option>
@@ -2003,6 +2119,7 @@
                                                 {d.desc || '無備註'} <span className="ml-2 font-bold text-[15px] text-slate-400">{d.item}</span>
                                             </div>
                                             <div className="font-bold text-[13px] text-slate-500 mt-0.5">{d.date} • {d.owner}</div>
+                                            {d.projectId && <div className="mt-1.5"><span className="tag bg-[var(--pastel-mint)]/55 text-[var(--text-mint)] shadow-sm">{getExpenseProjectName(d) || '專案'}</span></div>}
                                         </div>
                                     </div>
                                     <div className="flex flex-col sm:flex-row items-end sm:items-center gap-2 ml-auto pl-2">
@@ -2096,6 +2213,7 @@
                         {displayProjects.length === 0 && <p className="text-center font-bold text-[var(--bubble-text)]/40 py-10">{hasProjectQuery ? '找不到符合查詢條件的專案' : '尚無專案'}</p>}
                         {displayProjects.map(t => {
                             const isExpanded = expandedProject[t.id];
+                            const projectExpenses = getProjectExpenses(t.id);
                             const total = calculateProjectTotal(t);
                             const currentOwners = t.owners && t.owners.length > 0 ? t.owners : [];
                             const checklists = t.checklist || [];
@@ -2121,10 +2239,10 @@
                                     {isExpanded && (
                                         <div className="p-6 border-t-2 border-gray-50 bg-white/50">
                                             <div className="flex flex-wrap gap-2 mb-6">
-                                                {!t.completed && <button onClick={()=>openExpenseModal(t)} className="bubble-btn btn-primary !px-4 !py-2 !text-sm"><Icon name="dollar-sign" size={16}/> 記一筆</button>}
+                                                {!t.completed && <button onClick={()=>startDailyExpenseForProject(t)} className="bubble-btn btn-primary !px-4 !py-2 !text-sm"><Icon name="dollar-sign" size={16}/> 記一筆</button>}
                                                 <button onClick={()=>openProjectEdit(t)} className="bubble-btn btn-outline !px-4 !py-2 !text-sm !border-none shadow-sm"><Icon name="edit" size={16}/> 編輯</button>
                                                 <button onClick={()=>toggleProjectCompleted(t)} className="bubble-btn btn-outline !px-4 !py-2 !text-sm !border-none shadow-sm">{t.completed ? "重新開啟" : "標示為已結束"}</button>
-                                                <button onClick={()=>showConfirm('刪除專案', '確定刪除此專案與所有明細嗎？', async () => await deleteProject(t))} className="bubble-btn btn-danger !px-4 !py-2 !text-sm ml-auto"><Icon name="trash" size={16}/></button>
+                                                <button onClick={()=>showConfirm('刪除專案', '確定刪除此專案嗎？已記帳的消費會保留在日常流水帳。', async () => await deleteProject(t))} className="bubble-btn btn-danger !px-4 !py-2 !text-sm ml-auto"><Icon name="trash" size={16}/></button>
                                             </div>
                                             
                                             {/* Checklist 區塊 */}
@@ -2182,20 +2300,20 @@
                                                 </div>
                                             )}
 
-                                            {t.expenses && t.expenses.length > 0 && (
+                                            {projectExpenses.length > 0 && (
                                                 <div className="mt-5">
                                                     <h4 className="font-black text-[13px] text-[var(--bubble-text)]/50 uppercase tracking-wider mb-2 ml-1">專案費用明細</h4>
                                                     <div className="bg-white rounded-[20px] shadow-sm overflow-hidden border border-gray-50 divide-y divide-gray-50">
-                                                        {t.expenses.map((e, idx) => (
-                                                            <div key={idx} className="flex justify-between items-center p-4 hover:bg-gray-50 group">
+                                                        {projectExpenses.map(e => (
+                                                            <div key={e.id} className="flex justify-between items-center p-4 hover:bg-gray-50 group">
                                                                 <div>
                                                                     <div className="font-black text-[15px] text-slate-700">{e.desc || '無備註'} <span className="ml-2 font-bold text-[13px] text-slate-400">{e.item}</span></div>
-                                                                    <div className="font-bold text-[12px] text-[var(--bubble-text)]/40 mt-1">{e.date}</div>
+                                                                    <div className="font-bold text-[12px] text-[var(--bubble-text)]/40 mt-1">{e.date}{e.owner ? ` • ${e.owner}` : ''}</div>
                                                                 </div>
                                                                 <div className="flex flex-col sm:flex-row items-end sm:items-center gap-2 ml-auto pl-2">
                                                                     <div className="flex gap-1 sm:opacity-0 group-hover:opacity-100 transition-opacity order-2 sm:order-1">
-                                                                        <button onClick={()=>openExpenseModal(t, idx)} className="bg-[var(--pastel-blue)]/30 text-[var(--text-blue)] p-1.5 rounded-xl transition-all hover:bg-[var(--pastel-blue)]"><Icon name="edit-2" size={16} /></button>
-                                                                        <button onClick={()=>showConfirm('刪除明細', '確定要刪除這筆專案費用嗎？', async () => await deleteProjectExpense(t, idx))} className="bg-[var(--pastel-orange)]/30 text-[var(--text-orange)] p-1.5 rounded-xl transition-all hover:bg-[var(--pastel-orange)]"><Icon name="trash-2" size={16}/></button>
+                                                                        <button onClick={()=>setDailyEditData({...e})} className="bg-[var(--pastel-blue)]/30 text-[var(--text-blue)] p-1.5 rounded-xl transition-all hover:bg-[var(--pastel-blue)]"><Icon name="edit-2" size={16} /></button>
+                                                                        <button onClick={()=>showConfirm('刪除明細', '確定要刪除這筆專案費用嗎？', () => db.collection('artifacts').doc(appId).collection('public').doc('data').collection('dailyExpenses').doc(e.id).delete())} className="bg-[var(--pastel-orange)]/30 text-[var(--text-orange)] p-1.5 rounded-xl transition-all hover:bg-[var(--pastel-orange)]"><Icon name="trash-2" size={16}/></button>
                                                                     </div>
                                                                     <span className="font-black text-lg text-[var(--bubble-text)] text-right order-1 sm:order-2">${parseFloat(e.amount).toLocaleString()}</span>
                                                                 </div>
@@ -2226,7 +2344,7 @@
                         </button>
                         {!isAnalyticsFilterOpen && (
                             <div className="text-[12px] font-bold text-[var(--bubble-text)]/45 truncate">
-                                {[(!analyticsStart && !analyticsEnd) ? 'All' : formatQueryDateSummary(analyticsStart, analyticsEnd), analyticsCatFilter !== 'all' ? analyticsCatFilter : '', analyticsOwnerFilter !== 'all' ? analyticsOwnerFilter : '', analyticsKeyword ? `關鍵字：${analyticsKeyword}` : ''].filter(Boolean).join('｜') || '未設定篩選'}
+                                {[(!analyticsStart && !analyticsEnd) ? 'All' : formatQueryDateSummary(analyticsStart, analyticsEnd), analyticsCatFilter !== 'all' ? analyticsCatFilter : '', analyticsOwnerFilter !== 'all' ? analyticsOwnerFilter : '', analyticsProjectFilter !== 'all' ? (analyticsProjectFilter === 'none' ? '無專案' : (projects.find(p => p.id === analyticsProjectFilter)?.text || '專案')) : '', analyticsKeyword ? `關鍵字：${analyticsKeyword}` : ''].filter(Boolean).join('｜') || '未設定篩選'}
                             </div>
                         )}
                         {isAnalyticsFilterOpen && (
@@ -2252,6 +2370,11 @@
                                         {dailyOwnerOptions.map(o => <option key={o} value={o}>{o}</option>)}
                                     </select>
                                 </div>
+                                <select value={analyticsDraftProjectFilter} onChange={e=>setAnalyticsDraftProjectFilter(e.target.value)} className="w-full min-w-0 !max-w-full !py-2 !px-3 !text-sm">
+                                    <option value="all">專案</option>
+                                    <option value="none">無專案</option>
+                                    {projects.map(project => <option key={project.id} value={project.id}>{project.text}</option>)}
+                                </select>
                                 <input type="text" value={analyticsDraftKeyword} onChange={e=>setAnalyticsDraftKeyword(e.target.value)} placeholder="關鍵字：備註、專案名稱..." className="w-full min-w-0 !max-w-full !py-2 !px-3 !text-sm" />
                                 <div className="flex gap-3 pt-2">
                                     <button onClick={clearAnalyticsFilters} className="bubble-btn btn-outline flex-1 !py-2 !px-4 !text-sm"><Icon name="rotate-ccw" size={15}/> 清除</button>
@@ -2682,7 +2805,7 @@
                                     <Icon name="loader" size={28} className="animate-spin text-[var(--text-blue)]" />
                                 </div>
                                 <div className="font-black text-lg text-[var(--bubble-text)]">資料載入中</div>
-                                <div className="font-bold text-sm text-[var(--bubble-text)]/50 mt-1">正在同步本月記帳與專案資料...</div>
+                                <div className="font-bold text-sm text-[var(--bubble-text)]/50 mt-1">正在同步記帳與專案資料...</div>
                             </div>
                         </div>
                     )}
@@ -2716,6 +2839,11 @@
                                             {dailyOwnerOptions.map(o => <option key={o} value={o}>{o}</option>)}
                                         </select>
                                     </div>
+                                    <select value={dailyQueryDraft.project} onChange={e=>setDailyQueryDraft({...dailyQueryDraft, project: e.target.value})} className="w-full min-w-0 !max-w-full !text-sm">
+                                        <option value="all">專案</option>
+                                        <option value="none">無專案</option>
+                                        {projects.map(project => <option key={project.id} value={project.id}>{project.text}</option>)}
+                                    </select>
                                     <input type="text" value={dailyQueryDraft.note} onChange={e=>setDailyQueryDraft({...dailyQueryDraft, note: e.target.value})} placeholder="搜尋備註..." className="w-full min-w-0 !max-w-full !text-sm" />
                                     <div className="flex gap-3 pt-2">
                                         <button onClick={clearDailyQuery} className="bubble-btn btn-outline flex-1 !py-2 !px-4 !text-sm">清除</button>
@@ -2805,15 +2933,20 @@
                                 </div>
                                 <form onSubmit={submitDailyEdit} className="p-5 sm:p-6 space-y-4">
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mobile-stack">
-                                        <input type="date" value={dailyEditData.date} onChange={e=>setDailyEditData({...dailyEditData, date: e.target.value})} required className="w-full min-w-0 !max-w-full" />
+                                        <input type="date" value={dailyEditData.date} onChange={e=>{ const nextDate = e.target.value; const selectedProject = projects.find(project => project.id === dailyEditData.projectId); setDailyEditData({...dailyEditData, date: nextDate, projectId: selectedProject && projectIncludesExpenseDate(selectedProject, nextDate) ? dailyEditData.projectId : ''}); }} required className="w-full min-w-0 !max-w-full" />
                                         <input type="number" inputMode="decimal" pattern="[0-9]*" enterKeyHint="done" placeholder="金額 $" value={dailyEditData.amount} onChange={e=>setDailyEditData({...dailyEditData, amount: e.target.value})} required className="w-full min-w-0 !max-w-full font-black text-xl text-[var(--text-blue)]" />
                                     </div>
+                                    <select value={dailyEditData.projectId || ''} onChange={e=>setDailyEditData({...dailyEditData, projectId: e.target.value})} className="w-full min-w-0 !max-w-full">
+                                        <option value="">無專案（選填）</option>
+                                        {projects.filter(project => projectIncludesExpenseDate(project, dailyEditData.date) || project.id === dailyEditData.projectId).map(project => <option key={project.id} value={project.id}>{project.text}</option>)}
+                                    </select>
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mobile-stack">
                                         <select value={dailyEditData.item} onChange={e=>setDailyEditData({...dailyEditData, item: e.target.value})} required className="w-full min-w-0 !max-w-full">
                                             <option value="">選擇分類...</option>
                                             {expenseItems.map(i => <option key={i.id} value={i.name}>{i.name}</option>)}
                                         </select>
                                         <select value={dailyEditData.owner} onChange={e=>setDailyEditData({...dailyEditData, owner: e.target.value})} required className="w-full min-w-0 !max-w-full">
+                                            {dailyEditData.owner && !dailyOwnerOptions.includes(dailyEditData.owner) && <option value={dailyEditData.owner}>{dailyEditData.owner}</option>}
                                             {dailyOwnerOptions.map(o => <option key={o} value={o}>{o}</option>)}
                                         </select>
                                     </div>
@@ -2934,30 +3067,7 @@
                         </div>
                     )}
 
-                    {/* 專案記單筆花費 Modal (降一列垂直排列解決手機板破圖) */}
-                    {expenseModalProject && (
-                        <div className="modal-overlay" onClick={() => setExpenseModalProject(null)}>
-                            <div className="bubble-card bg-white w-full max-w-sm modal-panel overflow-hidden animate-in zoom-in-95 duration-200 mx-4" onClick={e=>e.stopPropagation()}>
-                                <div className="p-4 border-b-2 border-gray-50 flex justify-between items-center bg-[var(--pastel-mint)]/30">
-                                    <h3 className="font-black text-lg text-[var(--text-mint)]">{projExpEditingIdx !== null ? '編輯專案費用' : '記一筆專案費用'}</h3>
-                                    <button onClick={() => setExpenseModalProject(null)} className="p-1.5 bg-white rounded-full text-gray-500 hover:bg-gray-100"><Icon name="x" size={18}/></button>
-                                </div>
-                                <form onSubmit={submitProjectExpense} className="p-5 sm:p-6 space-y-4">
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mobile-stack">
-                                        <input type="date" value={projExpDate} onChange={e=>setProjExpDate(e.target.value)} required className="w-full min-w-0 !max-w-full" />
-                                        <input type="number" inputMode="decimal" pattern="[0-9]*" enterKeyHint="done" placeholder="金額 $" value={projExpAmount} onChange={e=>setProjExpAmount(e.target.value)} required className="w-full min-w-0 !max-w-full font-black text-xl text-[var(--text-mint)]" />
-                                    </div>
-                                    <select className="w-full min-w-0 !max-w-full" value={projExpItem} onChange={e=>setProjExpItem(e.target.value)} required>
-                                        <option value="">選擇分類...</option>
-                                        {expenseItems.map(opt => <option key={opt.id} value={opt.name}>{opt.name}</option>)}
-                                        <option value="其他">其他</option>
-                                    </select>
-                                    <input placeholder="備註 (選填)..." value={projExpDesc} onChange={e=>setProjExpDesc(e.target.value)} className="w-full min-w-0 !max-w-full" />
-                                    <button type="submit" disabled={isProcessing} className="bubble-btn btn-mint w-full py-3 mt-4">{projExpEditingIdx !== null ? '儲存修改' : '加入明細'}</button>
-                                </form>
-                            </div>
-                        </div>
-                    )}
+                    {/* 專案費用已統一使用日常記帳表單，不再保留第二套專案費用 Modal。 */}
 
                     {/* 任務清單附件管理 Modal */}
                     {checklistAttachmentModal && (
