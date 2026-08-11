@@ -2111,25 +2111,29 @@
                             {isDailyLoading && <p className="font-bold text-[var(--bubble-text)]/40 p-5 text-center flex items-center justify-center gap-2"><Icon name="loader" size={16} className="animate-spin" /> 讀取中...</p>}
                             {!isDailyLoading && displayDaily.length === 0 && <p className="font-bold text-[var(--bubble-text)]/40 p-5 text-center">{hasDailyQuery ? '找不到符合查詢條件的日常紀錄' : '目前還沒有日常花費紀錄'}</p>}
                             {!isDailyLoading && displayDaily.map(d => (
-                                <div key={d.id} className="p-4 flex justify-between items-center bg-white rounded-[20px] shadow-sm hover:shadow-md transition-shadow group">
-                                    <div className="flex items-center gap-4">
-                                        <div className="w-12 h-12 rounded-[16px] bg-slate-100/70 flex items-center justify-center text-slate-500"><Icon name="receipt" size={20} /></div>
-                                        <div>
-                                            <div className="font-black text-[17px] text-slate-700 tracking-wide">
-                                                {d.desc || '無備註'} <span className="ml-2 font-bold text-[15px] text-slate-400">{d.item}</span>
+                                <div key={d.id} className="relative p-4 pb-12 bg-white rounded-[20px] shadow-sm hover:shadow-md transition-shadow">
+                                    <div className="flex items-start gap-3 pr-20">
+                                        <div className="w-11 h-11 shrink-0 rounded-[15px] bg-slate-100/70 flex items-center justify-center text-slate-500"><Icon name="receipt" size={19} /></div>
+                                        <div className="min-w-0 flex-1">
+                                            {/* 第一列：分類 + 專案名稱 */}
+                                            <div className="flex flex-wrap items-center gap-1.5 min-h-[24px]">
+                                                <span className="font-black text-[15px] text-slate-600">{d.item || '未分類'}</span>
+                                                {d.projectId && <span className="tag bg-[var(--pastel-mint)]/55 text-[var(--text-mint)] shadow-sm max-w-full truncate">{getExpenseProjectName(d) || '專案'}</span>}
                                             </div>
-                                            <div className="font-bold text-[13px] text-slate-500 mt-0.5">{d.date} • {d.owner}</div>
-                                            {d.projectId && <div className="mt-1.5"><span className="tag bg-[var(--pastel-mint)]/55 text-[var(--text-mint)] shadow-sm">{getExpenseProjectName(d) || '專案'}</span></div>}
+                                            {/* 第二列：備註 */}
+                                            <div className="font-black text-[17px] text-slate-700 tracking-wide mt-1.5 break-words">
+                                                {d.desc || '無備註'}
+                                            </div>
+                                            {/* 第三列：日期 + 成員 */}
+                                            <div className="font-bold text-[13px] text-slate-500 mt-1">{d.date} • {d.owner}</div>
                                         </div>
                                     </div>
-                                    <div className="flex flex-col sm:flex-row items-end sm:items-center gap-2 ml-auto pl-2">
-                                        <div className="flex gap-1 sm:opacity-0 group-hover:opacity-100 transition-opacity order-2 sm:order-1">
-                                            {/* 改為開啟彈窗 (Modal) 來編輯，不再需要畫面捲動回上方 */}
-                                            <button onClick={()=>setDailyEditData({...d})} className="bg-[var(--pastel-blue)]/30 text-[var(--text-blue)] p-1.5 rounded-xl transition-all hover:bg-[var(--pastel-blue)]"><Icon name="edit-2" size={16} /></button>
-                                            <button onClick={()=>showConfirm('刪除花費', '確定要刪除這筆紀錄嗎？', ()=>db.collection('artifacts').doc(appId).collection('public').doc('data').collection('dailyExpenses').doc(d.id).delete())} className="bg-[var(--pastel-orange)]/30 text-[var(--text-orange)] p-1.5 rounded-xl transition-all hover:bg-[var(--pastel-orange)]"><Icon name="trash-2" size={16} /></button>
-                                        </div>
-                                        {/* 明細清單右邊數字調小： text-xl 改為 text-lg */}
-                                        <span className="font-black text-lg text-[var(--bubble-text)] text-right order-1 sm:order-2">${parseFloat(d.amount).toLocaleString()}</span>
+
+                                    {/* 金額維持右上角，修改 / 刪除固定在卡片右下角，方便 iPhone 點選 */}
+                                    <span className="absolute right-4 top-4 font-black text-lg text-[var(--bubble-text)] text-right">${parseFloat(d.amount).toLocaleString()}</span>
+                                    <div className="absolute right-4 bottom-3 flex items-center gap-1.5">
+                                        <button onClick={()=>setDailyEditData({...d})} className="bg-[var(--pastel-blue)]/30 text-[var(--text-blue)] p-1.5 rounded-xl transition-all active:scale-95 hover:bg-[var(--pastel-blue)]" title="修改"><Icon name="edit-2" size={16} /></button>
+                                        <button onClick={()=>showConfirm('刪除花費', '確定要刪除這筆紀錄嗎？', ()=>db.collection('artifacts').doc(appId).collection('public').doc('data').collection('dailyExpenses').doc(d.id).delete())} className="bg-[var(--pastel-orange)]/30 text-[var(--text-orange)] p-1.5 rounded-xl transition-all active:scale-95 hover:bg-[var(--pastel-orange)]" title="刪除"><Icon name="trash-2" size={16} /></button>
                                     </div>
                                 </div>
                             ))}
