@@ -2118,7 +2118,7 @@
                                             {/* 第一列：分類 + 專案名稱 */}
                                             <div className="flex flex-wrap items-center gap-1.5 min-h-[24px] pr-20">
                                                 <span className="font-black text-[15px] text-slate-400">{d.item || '未分類'}</span>
-                                                {d.projectId && <span className="tag bg-[var(--pastel-mint)]/55 text-[var(--text-mint)] shadow-sm max-w-full truncate">{getExpenseProjectName(d) || '專案'}</span>}
+                                                {d.projectId && <span className="tag bg-[var(--pastel-mint)]/55 text-blue-800 shadow-sm max-w-full truncate">{getExpenseProjectName(d) || '專案'}</span>}
                                             </div>
                                             {/* 第二列：備註 */}
                                             <div className="font-black text-[17px] text-slate-700 tracking-wide mt-1.5 break-words">
@@ -3000,7 +3000,18 @@
                                         <div className="pt-2">
                                             <label className="font-black mb-2 block text-sm text-[var(--bubble-text)]/60">專案日期區間</label>
                                             <div className="flex items-center gap-1">
-                                                <input type="date" value={startDate} onChange={e=>setStartDate(e.target.value)} className="flex-1 min-w-0 !max-w-full !bg-white !px-1.5 !py-2 !text-xs tracking-tighter sm:text-sm text-center" />
+                                                <input
+                                                    type="date"
+                                                    value={startDate}
+                                                    onChange={e => {
+                                                        const nextStartDate = e.target.value;
+                                                        setStartDate(nextStartDate);
+                                                        // 新增專案：選擇開始日期後，結束日期預設同一天。
+                                                        // 編輯既有專案時保留原本結束日期，避免誤覆蓋。
+                                                        if (!projectEditingId) setEndDate(nextStartDate);
+                                                    }}
+                                                    className="flex-1 min-w-0 !max-w-full !bg-white !px-1.5 !py-2 !text-xs tracking-tighter sm:text-sm text-center"
+                                                />
                                                 <span className="font-black text-gray-300 shrink-0 mx-0.5">→</span>
                                                 <input type="date" value={endDate} onChange={e=>setEndDate(e.target.value)} className="flex-1 min-w-0 !max-w-full !bg-white !px-1.5 !py-2 !text-xs tracking-tighter sm:text-sm text-center" />
                                             </div>
