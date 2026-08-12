@@ -593,12 +593,14 @@
             const [analyticsEnd, setAnalyticsEnd] = useState(initialAnalyticsRange.end);
             const [analyticsCatFilter, setAnalyticsCatFilter] = useState('all');
             const [analyticsOwnerFilter, setAnalyticsOwnerFilter] = useState('all');
+            const [analyticsProjectCategoryFilter, setAnalyticsProjectCategoryFilter] = useState('all');
             const [analyticsProjectFilter, setAnalyticsProjectFilter] = useState('all');
             const [analyticsKeyword, setAnalyticsKeyword] = useState('');
             const [analyticsDraftStart, setAnalyticsDraftStart] = useState(initialAnalyticsRange.start);
             const [analyticsDraftEnd, setAnalyticsDraftEnd] = useState(initialAnalyticsRange.end);
             const [analyticsDraftCatFilter, setAnalyticsDraftCatFilter] = useState('all');
             const [analyticsDraftOwnerFilter, setAnalyticsDraftOwnerFilter] = useState('all');
+            const [analyticsDraftProjectCategoryFilter, setAnalyticsDraftProjectCategoryFilter] = useState('all');
             const [analyticsDraftProjectFilter, setAnalyticsDraftProjectFilter] = useState('all');
             const [analyticsDraftKeyword, setAnalyticsDraftKeyword] = useState('');
             const [analyticsListSort, setAnalyticsListSort] = useState('desc');
@@ -1675,6 +1677,7 @@
                 setAnalyticsEnd(analyticsDraftEnd);
                 setAnalyticsCatFilter(analyticsDraftCatFilter);
                 setAnalyticsOwnerFilter(analyticsDraftOwnerFilter);
+                setAnalyticsProjectCategoryFilter(analyticsDraftProjectCategoryFilter);
                 setAnalyticsProjectFilter(analyticsDraftProjectFilter);
                 setAnalyticsKeyword(analyticsDraftKeyword.trim());
                 setIsAnalyticsFilterOpen(false);
@@ -1687,12 +1690,14 @@
                 setAnalyticsDraftEnd(currentMonthRange.end);
                 setAnalyticsDraftCatFilter('all');
                 setAnalyticsDraftOwnerFilter('all');
+                setAnalyticsDraftProjectCategoryFilter('all');
                 setAnalyticsDraftProjectFilter('all');
                 setAnalyticsDraftKeyword('');
                 setAnalyticsStart(currentMonthRange.start);
                 setAnalyticsEnd(currentMonthRange.end);
                 setAnalyticsCatFilter('all');
                 setAnalyticsOwnerFilter('all');
+                setAnalyticsProjectCategoryFilter('all');
                 setAnalyticsProjectFilter('all');
                 setAnalyticsKeyword('');
                 setIsAnalyticsFilterOpen(false);
@@ -1845,6 +1850,9 @@
                     if (analyticsStart && (d.date || '') < analyticsStart) return;
                     if (analyticsEnd && (d.date || '') > analyticsEnd) return;
                     if (analyticsCatFilter !== 'all' && d.item !== analyticsCatFilter) return;
+
+                    const linkedProject = d.projectId ? projects.find(project => project.id === d.projectId) : null;
+                    if (analyticsProjectCategoryFilter !== 'all' && (!linkedProject || linkedProject.category !== analyticsProjectCategoryFilter)) return;
                     if (analyticsProjectFilter === 'none' && d.projectId) return;
                     if (analyticsProjectFilter !== 'all' && analyticsProjectFilter !== 'none' && d.projectId !== analyticsProjectFilter) return;
 
@@ -1890,7 +1898,7 @@
                 });
 
                 return { sortedOwners: Object.entries(ownerMap).sort((a,b)=>b[1]-a[1]), totalExpense, trendKeys: Object.keys(trendMap).sort(), trendMap, catMap, rows };
-            }, [analyticsDailyExpenses, projects, analyticsStart, analyticsEnd, analyticsCatFilter, analyticsOwnerFilter, analyticsProjectFilter, analyticsKeyword]);
+            }, [analyticsDailyExpenses, projects, analyticsStart, analyticsEnd, analyticsCatFilter, analyticsOwnerFilter, analyticsProjectCategoryFilter, analyticsProjectFilter, analyticsKeyword]);
 
             const sortedAnalyticsRows = useMemo(() => {
                 return [...analyticsData.rows].sort((a, b) => analyticsListSort === 'desc'
@@ -2061,7 +2069,7 @@
                             <input type="number" inputMode="decimal" pattern="[0-9]*" enterKeyHint="done" placeholder="金額 $" value={dailyAmount} onChange={e=>setDailyAmount(e.target.value)} required className="w-full min-w-0 !max-w-full text-xl text-[var(--text-blue)] font-black" />
                         </div>
                         <select value={dailyProjectId} onChange={e=>setDailyProjectId(e.target.value)} className="w-full min-w-0 !max-w-full">
-                            <option value="">無專案（選填）</option>
+                            <option value="">無專案</option>
                             {availableProjectsForDailyDate.map(project => <option key={project.id} value={project.id}>{project.text}</option>)}
                         </select>
                         <div className="grid grid-cols-2 gap-3">
@@ -2121,13 +2129,13 @@
                                                 {d.projectId && <span className="tag bg-[var(--pastel-mint)]/55 text-blue-800 shadow-sm max-w-full truncate">{getExpenseProjectName(d) || '專案'}</span>}
                                             </div>
                                             {/* 第二列：備註 */}
-                                            <div className="font-black text-[17px] text-slate-700 tracking-wide mt-1.5 break-words">
+                                            <div className="font-black text-[17px] leading-[21px] text-slate-700 tracking-wide mt-1.5 break-words">
                                                 {d.desc || '無備註'}
                                             </div>
-                                            {/* 第三列：日期 + 成員 + 修改 / 刪除 */}
-                                            <div className="flex items-center justify-between gap-2 mt-1">
-                                                <div className="min-w-0 font-bold text-[13px] text-slate-500 truncate">{d.date} • {d.owner}</div>
-                                                <div className="shrink-0 flex items-center gap-1.5">
+                                            {/* 第三列：日期 + 成員。右側按鈕採絕對定位，不再撐高第三列。 */}
+                                            <div className="relative mt-0.5 pr-[70px] min-h-[18px]">
+                                                <div className="min-w-0 font-bold text-[13px] leading-[18px] text-slate-500 truncate">{d.date} • {d.owner}</div>
+                                                <div className="absolute right-0 top-[-5px] flex items-center gap-1.5">
                                                     <button onClick={()=>setDailyEditData({...d})} className="bg-[var(--pastel-blue)]/30 text-[var(--text-blue)] p-1.5 rounded-xl transition-all active:scale-95 hover:bg-[var(--pastel-blue)]" title="修改"><Icon name="edit-2" size={16} /></button>
                                                     <button onClick={()=>showConfirm('刪除花費', '確定要刪除這筆紀錄嗎？', ()=>db.collection('artifacts').doc(appId).collection('public').doc('data').collection('dailyExpenses').doc(d.id).delete())} className="bg-[var(--pastel-orange)]/30 text-[var(--text-orange)] p-1.5 rounded-xl transition-all active:scale-95 hover:bg-[var(--pastel-orange)]" title="刪除"><Icon name="trash-2" size={16} /></button>
                                                 </div>
@@ -2228,12 +2236,12 @@
                                 <div key={t.id} id={`project-card-${t.id}`} className={`bubble-card overflow-hidden ${t.completed ? 'opacity-70 bg-gray-50' : 'bg-white'}`}>
                                     <div className="p-6 cursor-pointer hover:bg-[var(--bubble-bg)]/50 flex items-start gap-4 transition-colors" onClick={()=>setExpandedProject({...expandedProject, [t.id]: !isExpanded})}>
                                         <div className="mt-1"><Icon name={isExpanded ? "folder-open" : "folder"} size={26} className="text-[var(--pastel-blue)]" /></div>
-                                        <div className="flex-grow">
-                                            <div className="flex justify-between items-start mb-2">
+                                        <div className="flex-grow min-w-0 relative">
+                                            <div className="relative pr-[118px]">
                                                 <h3 className="font-black text-xl leading-tight text-[var(--bubble-text)]">{t.text}</h3>
-                                                {total > 0 && <span className="font-black text-lg bg-[var(--pastel-yellow)] px-3 py-1 rounded-[12px] text-[var(--text-yellow)]">${total.toLocaleString()}</span>}
+                                                {total > 0 && <span className="absolute right-0 top-0 font-black text-lg bg-[var(--pastel-yellow)] px-3 py-1 rounded-[12px] text-[var(--text-yellow)]">${total.toLocaleString()}</span>}
                                             </div>
-                                            <div className="flex flex-wrap gap-2 mt-3">
+                                            <div className="flex flex-wrap gap-2 mt-1.5">
                                                 <span className="tag bg-[var(--pastel-gray)] text-gray-700 shadow-sm">{t.category}</span>
                                                 {currentOwners.map(o => <span key={o} className="tag bg-[#F8FAFC] text-[var(--bubble-text)] border border-gray-100">{o}</span>)}
                                             </div>
@@ -2350,7 +2358,7 @@
                         </button>
                         {!isAnalyticsFilterOpen && (
                             <div className="text-[12px] font-bold text-[var(--bubble-text)]/45 truncate">
-                                {[(!analyticsStart && !analyticsEnd) ? 'All' : formatQueryDateSummary(analyticsStart, analyticsEnd), analyticsCatFilter !== 'all' ? analyticsCatFilter : '', analyticsOwnerFilter !== 'all' ? analyticsOwnerFilter : '', analyticsProjectFilter !== 'all' ? (analyticsProjectFilter === 'none' ? '無專案' : (projects.find(p => p.id === analyticsProjectFilter)?.text || '專案')) : '', analyticsKeyword ? `關鍵字：${analyticsKeyword}` : ''].filter(Boolean).join('｜') || '未設定篩選'}
+                                {[(!analyticsStart && !analyticsEnd) ? 'All' : formatQueryDateSummary(analyticsStart, analyticsEnd), analyticsCatFilter !== 'all' ? `費用：${analyticsCatFilter}` : '', analyticsOwnerFilter !== 'all' ? analyticsOwnerFilter : '', analyticsProjectCategoryFilter !== 'all' ? `專案分類：${analyticsProjectCategoryFilter}` : '', analyticsProjectFilter !== 'all' ? (analyticsProjectFilter === 'none' ? '無專案' : (projects.find(p => p.id === analyticsProjectFilter)?.text || '專案')) : '', analyticsKeyword ? `關鍵字：${analyticsKeyword}` : ''].filter(Boolean).join('｜') || '未設定篩選'}
                             </div>
                         )}
                         {isAnalyticsFilterOpen && (
@@ -2376,11 +2384,17 @@
                                         {dailyOwnerOptions.map(o => <option key={o} value={o}>{o}</option>)}
                                     </select>
                                 </div>
-                                <select value={analyticsDraftProjectFilter} onChange={e=>setAnalyticsDraftProjectFilter(e.target.value)} className="w-full min-w-0 !max-w-full !py-2 !px-3 !text-sm">
-                                    <option value="all">專案</option>
-                                    <option value="none">無專案</option>
-                                    {projects.map(project => <option key={project.id} value={project.id}>{project.text}</option>)}
-                                </select>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <select value={analyticsDraftProjectCategoryFilter} onChange={e=>setAnalyticsDraftProjectCategoryFilter(e.target.value)} className="w-full min-w-0 !max-w-full !py-2 !px-3 !text-sm">
+                                        <option value="all">專案分類</option>
+                                        {categories.map(categoryItem => <option key={categoryItem.id} value={categoryItem.name}>{categoryItem.name}</option>)}
+                                    </select>
+                                    <select value={analyticsDraftProjectFilter} onChange={e=>setAnalyticsDraftProjectFilter(e.target.value)} className="w-full min-w-0 !max-w-full !py-2 !px-3 !text-sm">
+                                        <option value="all">專案</option>
+                                        <option value="none">無專案</option>
+                                        {projects.map(project => <option key={project.id} value={project.id}>{project.text}</option>)}
+                                    </select>
+                                </div>
                                 <input type="text" value={analyticsDraftKeyword} onChange={e=>setAnalyticsDraftKeyword(e.target.value)} placeholder="關鍵字：備註、專案名稱..." className="w-full min-w-0 !max-w-full !py-2 !px-3 !text-sm" />
                                 <div className="flex gap-3 pt-2">
                                     <button onClick={clearAnalyticsFilters} className="bubble-btn btn-outline flex-1 !py-2 !px-4 !text-sm"><Icon name="rotate-ccw" size={15}/> 清除</button>
@@ -2943,7 +2957,7 @@
                                         <input type="number" inputMode="decimal" pattern="[0-9]*" enterKeyHint="done" placeholder="金額 $" value={dailyEditData.amount} onChange={e=>setDailyEditData({...dailyEditData, amount: e.target.value})} required className="w-full min-w-0 !max-w-full font-black text-xl text-[var(--text-blue)]" />
                                     </div>
                                     <select value={dailyEditData.projectId || ''} onChange={e=>setDailyEditData({...dailyEditData, projectId: e.target.value})} className="w-full min-w-0 !max-w-full">
-                                        <option value="">無專案（選填）</option>
+                                        <option value="">無專案</option>
                                         {projects.filter(project => projectIncludesExpenseDate(project, dailyEditData.date) || project.id === dailyEditData.projectId).map(project => <option key={project.id} value={project.id}>{project.text}</option>)}
                                     </select>
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mobile-stack">
@@ -3010,10 +3024,10 @@
                                                         // 編輯既有專案時保留原本結束日期，避免誤覆蓋。
                                                         if (!projectEditingId) setEndDate(nextStartDate);
                                                     }}
-                                                    className="flex-1 min-w-0 !max-w-full !bg-white !px-1.5 !py-2 !text-xs tracking-tighter sm:text-sm text-center"
+                                                    className="flex-1 min-w-0 !max-w-full !bg-white !px-2 !py-2.5 !min-h-[46px] !text-xs tracking-tighter sm:text-sm text-center"
                                                 />
                                                 <span className="font-black text-gray-300 shrink-0 mx-0.5">→</span>
-                                                <input type="date" value={endDate} onChange={e=>setEndDate(e.target.value)} className="flex-1 min-w-0 !max-w-full !bg-white !px-1.5 !py-2 !text-xs tracking-tighter sm:text-sm text-center" />
+                                                <input type="date" value={endDate} onChange={e=>setEndDate(e.target.value)} className="flex-1 min-w-0 !max-w-full !bg-white !px-2 !py-2.5 !min-h-[46px] !text-xs tracking-tighter sm:text-sm text-center" />
                                             </div>
                                             {isProjectDateInvalid && <div className="text-[var(--text-orange)] text-sm font-bold mt-2">結束日期不能早於起始日期！</div>}
                                         </div>
