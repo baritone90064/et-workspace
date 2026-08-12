@@ -2133,7 +2133,7 @@
                                                 {d.desc || '無備註'}
                                             </div>
                                             {/* 第三列：日期 + 成員。右側按鈕採絕對定位，不再撐高第三列。 */}
-                                            <div className="relative mt-0.5 pr-[70px] min-h-[18px]">
+                                            <div className="relative mt-1.5 pr-[70px] min-h-[18px]">
                                                 <div className="min-w-0 font-bold text-[13px] leading-[18px] text-slate-500 truncate">{d.date} • {d.owner}</div>
                                                 <div className="absolute right-0 top-[-5px] flex items-center gap-1.5">
                                                     <button onClick={()=>setDailyEditData({...d})} className="bg-[var(--pastel-blue)]/30 text-[var(--text-blue)] p-1.5 rounded-xl transition-all active:scale-95 hover:bg-[var(--pastel-blue)]" title="修改"><Icon name="edit-2" size={16} /></button>
@@ -2245,7 +2245,7 @@
                                                 <span className="tag bg-[var(--pastel-gray)] text-gray-700 shadow-sm">{t.category}</span>
                                                 {currentOwners.map(o => <span key={o} className="tag bg-[#F8FAFC] text-[var(--bubble-text)] border border-gray-100">{o}</span>)}
                                             </div>
-                                            {(t.startDate || t.endDate) && <div className="font-bold text-[13px] text-[var(--bubble-text)]/50 mt-3 flex items-center gap-1.5"><Icon name="calendar" size={14}/> {t.startDate} {t.endDate && `→ ${t.endDate}`}</div>}
+                                            {(t.startDate || t.endDate) && <div className="font-bold text-[13px] text-[var(--bubble-text)]/50 mt-1.5 flex items-center gap-1.5"><Icon name="calendar" size={14}/> {t.startDate} {t.endDate && `→ ${t.endDate}`}</div>}
                                             {t.showInCalendar === false && <div className="font-bold text-[12px] text-slate-400 mt-2 flex items-center gap-1.5"><Icon name="calendar-x" size={13}/> 不顯示於行事曆</div>}
                                         </div>
                                     </div>
@@ -2468,7 +2468,7 @@
                                             <span className="font-black text-[13px] text-[var(--bubble-text)]/60">{row.date}</span>
                                         </div>
                                         <div className="font-black text-[15px] truncate text-[var(--bubble-text)]">{row.source === '專案' && row.projectName ? `${row.projectName}｜` : ''}{row.title}</div>
-                                        <div className="font-bold text-[12px] text-[var(--bubble-text)]/45 mt-0.5">{row.item}　{row.owner}</div>
+                                        <div className="font-bold text-[12px] text-slate-500 mt-0.5">{row.item}　{row.owner}</div>
                                     </div>
                                     <div className="font-black text-[16px] text-[var(--bubble-text)] shrink-0">${Number(row.amount || 0).toLocaleString()}</div>
                                 </div>
@@ -3024,10 +3024,10 @@
                                                         // 編輯既有專案時保留原本結束日期，避免誤覆蓋。
                                                         if (!projectEditingId) setEndDate(nextStartDate);
                                                     }}
-                                                    className="flex-1 min-w-0 !max-w-full !bg-white !px-2 !py-2.5 !min-h-[46px] !text-xs tracking-tighter sm:text-sm text-center"
+                                                    className="flex-1 min-w-0 !max-w-full !bg-white !px-2 !py-2.5 !min-h-[46px] !text-sm tracking-tighter text-center"
                                                 />
                                                 <span className="font-black text-gray-300 shrink-0 mx-0.5">→</span>
-                                                <input type="date" value={endDate} onChange={e=>setEndDate(e.target.value)} className="flex-1 min-w-0 !max-w-full !bg-white !px-2 !py-2.5 !min-h-[46px] !text-xs tracking-tighter sm:text-sm text-center" />
+                                                <input type="date" value={endDate} onChange={e=>setEndDate(e.target.value)} className="flex-1 min-w-0 !max-w-full !bg-white !px-2 !py-2.5 !min-h-[46px] !text-sm tracking-tighter text-center" />
                                             </div>
                                             {isProjectDateInvalid && <div className="text-[var(--text-orange)] text-sm font-bold mt-2">結束日期不能早於起始日期！</div>}
                                         </div>
