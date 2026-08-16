@@ -2237,13 +2237,15 @@
                                     <div className="p-6 cursor-pointer hover:bg-[var(--bubble-bg)]/50 flex items-start gap-4 transition-colors" onClick={()=>setExpandedProject({...expandedProject, [t.id]: !isExpanded})}>
                                         <div className="mt-1"><Icon name={isExpanded ? "folder-open" : "folder"} size={26} className="text-[var(--pastel-blue)]" /></div>
                                         <div className="flex-grow min-w-0 relative">
-                                            <div className="relative pr-[72px] sm:pr-[92px]">
+                                            <div>
                                                 <h3 className="font-black text-xl leading-tight text-[var(--bubble-text)] break-words">{t.text}</h3>
-                                                {total > 0 && <span className="absolute right-0 top-0 font-black text-lg bg-[var(--pastel-yellow)] px-3 py-1 rounded-[12px] text-[var(--text-yellow)]">${total.toLocaleString()}</span>}
                                             </div>
-                                            <div className="flex flex-wrap gap-2 mt-1.5">
-                                                <span className="tag bg-[var(--pastel-gray)] text-gray-700 shadow-sm">{t.category}</span>
-                                                {currentOwners.map(o => <span key={o} className="tag bg-[#F8FAFC] text-[var(--bubble-text)] border border-gray-100">{o}</span>)}
+                                            <div className="relative mt-1.5 pr-[104px]">
+                                                <div className="flex flex-wrap gap-2">
+                                                    <span className="tag bg-[var(--pastel-gray)] text-gray-700 shadow-sm">{t.category}</span>
+                                                    {currentOwners.map(o => <span key={o} className="tag bg-[#F8FAFC] text-[var(--bubble-text)] border border-gray-100">{o}</span>)}
+                                                </div>
+                                                {total > 0 && <span className="absolute right-0 top-0 font-black text-lg bg-[var(--pastel-yellow)] px-3 py-1 rounded-[12px] text-[var(--text-yellow)]">${total.toLocaleString()}</span>}
                                             </div>
                                             {(t.startDate || t.endDate) && <div className="font-bold text-[13px] text-[var(--bubble-text)]/50 mt-1.5 flex items-center gap-1.5"><Icon name="calendar" size={14}/> {t.startDate} {t.endDate && `→ ${t.endDate}`}</div>}
                                             {t.showInCalendar === false && <div className="font-bold text-[12px] text-slate-400 mt-2 flex items-center gap-1.5"><Icon name="calendar-x" size={13}/> 不顯示於行事曆</div>}
