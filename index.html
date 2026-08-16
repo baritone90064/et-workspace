@@ -2237,8 +2237,8 @@
                                     <div className="p-6 cursor-pointer hover:bg-[var(--bubble-bg)]/50 flex items-start gap-4 transition-colors" onClick={()=>setExpandedProject({...expandedProject, [t.id]: !isExpanded})}>
                                         <div className="mt-1"><Icon name={isExpanded ? "folder-open" : "folder"} size={26} className="text-[var(--pastel-blue)]" /></div>
                                         <div className="flex-grow min-w-0 relative">
-                                            <div className="relative pr-[118px]">
-                                                <h3 className="font-black text-xl leading-tight text-[var(--bubble-text)]">{t.text}</h3>
+                                            <div className="relative pr-[72px] sm:pr-[92px]">
+                                                <h3 className="font-black text-xl leading-tight text-[var(--bubble-text)] break-words">{t.text}</h3>
                                                 {total > 0 && <span className="absolute right-0 top-0 font-black text-lg bg-[var(--pastel-yellow)] px-3 py-1 rounded-[12px] text-[var(--text-yellow)]">${total.toLocaleString()}</span>}
                                             </div>
                                             <div className="flex flex-wrap gap-2 mt-1.5">
