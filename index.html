@@ -233,6 +233,13 @@
             margin-right: 0 !important;
         }
 
+        /* iPhone：Modal 內容本身承接垂直滑動，不讓手勢落到後方頁面 */
+        .project-form-scroll {
+            -webkit-overflow-scrolling: touch;
+            overscroll-behavior: contain;
+            touch-action: pan-y;
+        }
+
         @media (max-width: 480px) {
             html { font-size: 14px; }
             body { background-size: 24px 24px; }
@@ -617,7 +624,8 @@
 
             // Custom Dialogs
             const [confirmDialog, setConfirmDialog] = useState({ isOpen: false, title: '', message: '', onConfirm: null });
-            const [inputDialog, setInputDialog] = useState({ isOpen: false, title: '', value: '', placeholder: '', onConfirm: null });
+            const [inputDialog, setInputDialog] = useState({ isOpen: false, title: '', value: '', placeholder: '', onConfirm: null, error: '' });
+            const [inputDialogSubmitting, setInputDialogSubmitting] = useState(false);
 
             // Daily Form
             const [dailyDate, setDailyDate] = useState(getLocalDateString());
@@ -646,6 +654,38 @@
             const [isUploadingImage, setIsUploadingImage] = useState(false);
 
             const isProjectDateInvalid = startDate && endDate && endDate < startDate;
+
+            // iPhone：專案 Modal 開啟時鎖住後方頁面，避免第一下滑動捲到背景。
+            useEffect(() => {
+                if (!isProjectFormOpen) return;
+
+                const scrollY = window.scrollY || window.pageYOffset || 0;
+                const previous = {
+                    position: document.body.style.position,
+                    top: document.body.style.top,
+                    left: document.body.style.left,
+                    right: document.body.style.right,
+                    width: document.body.style.width,
+                    overflow: document.body.style.overflow
+                };
+
+                document.body.style.position = 'fixed';
+                document.body.style.top = `-${scrollY}px`;
+                document.body.style.left = '0';
+                document.body.style.right = '0';
+                document.body.style.width = '100%';
+                document.body.style.overflow = 'hidden';
+
+                return () => {
+                    document.body.style.position = previous.position;
+                    document.body.style.top = previous.top;
+                    document.body.style.left = previous.left;
+                    document.body.style.right = previous.right;
+                    document.body.style.width = previous.width;
+                    document.body.style.overflow = previous.overflow;
+                    window.scrollTo(0, scrollY);
+                };
+            }, [isProjectFormOpen]);
 
             // Project Detail
             const [expandedProject, setExpandedProject] = useState({});
@@ -1025,9 +1065,8 @@
                 
                 const unsubCats = path.collection('categories').onSnapshot(
                     snap => {
-                        let d = snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort(sortConfig);
-                        if (d.length === 0) ['日常', '旅遊', '專案'].forEach((name, i) => path.collection('categories').add({ name, order: i, createdAt: new Date().toISOString() }));
-                        else setCategories(d);
+                        const d = snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort(sortConfig);
+                        setCategories(d);
                         markSourceLoaded('categories');
                     },
                     err => { console.error('讀取專案類別失敗:', err); markSourceLoaded('categories'); }
@@ -1035,9 +1074,8 @@
 
                 const unsubExpItems = path.collection('expenseItems').onSnapshot(
                     snap => {
-                        let d = snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort(sortConfig);
-                        if (d.length === 0) ['餐飲', '交通', '購物', '娛樂'].forEach((name, i) => path.collection('expenseItems').add({ name, order: i, createdAt: new Date().toISOString() }));
-                        else setExpenseItems(d);
+                        const d = snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort(sortConfig);
+                        setExpenseItems(d);
                         markSourceLoaded('expenseItems');
                     },
                     err => { console.error('讀取費用分類失敗:', err); markSourceLoaded('expenseItems'); }
@@ -1045,9 +1083,8 @@
 
                 const unsubMembers = path.collection('members').onSnapshot(
                     snap => {
-                        let d = snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort(sortConfig);
-                        if (d.length === 0) ['Terry', 'Eric'].forEach((name, i) => path.collection('members').add({ name, order: i, createdAt: new Date().toISOString() }));
-                        else setMembers(d);
+                        const d = snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort(sortConfig);
+                        setMembers(d);
                         markSourceLoaded('members');
                     },
                     err => { console.error('讀取成員失敗:', err); markSourceLoaded('members'); }
@@ -1188,7 +1225,148 @@
 
 
             const showConfirm = (title, message, onConfirm) => setConfirmDialog({ isOpen: true, title, message, onConfirm });
-            const showInput = (title, defaultValue, placeholder, onConfirm) => setInputDialog({ isOpen: true, title, value: defaultValue, placeholder, onConfirm });
+            const showInput = (title, defaultValue, placeholder, onConfirm) => {
+                setInputDialogSubmitting(false);
+                setInputDialog({ isOpen: true, title, value: defaultValue, placeholder, onConfirm, error: '' });
+            };
+
+            // 設定名稱唯一性：成員、專案類別、費用分類都不得同名。
+            // 除了前端清單檢查，再用 Firestore transaction 的名稱鎖，
+            // 避免 Terry / Eric 兩台裝置同時新增同一名稱時產生競態。
+            const normalizeSettingName = (value) => String(value || '')
+                .trim()
+                .replace(/\s+/g, ' ')
+                .toLocaleLowerCase();
+
+            const cleanSettingName = (value) => String(value || '')
+                .trim()
+                .replace(/\s+/g, ' ');
+
+            const getSettingItemsByCollection = (collection) => {
+                if (collection === 'members') return members;
+                if (collection === 'categories') return categories;
+                if (collection === 'expenseItems') return expenseItems;
+                return [];
+            };
+
+            const createDuplicateSettingError = (name) => {
+                const error = new Error(`「${name}」已存在`);
+                error.code = 'duplicate-setting-name';
+                return error;
+            };
+
+            const getSettingNameLockRef = (collection, name) => {
+                const key = encodeURIComponent(normalizeSettingName(name));
+                return db.collection('artifacts')
+                    .doc(appId)
+                    .collection('public')
+                    .doc('data')
+                    .collection('_settingNameLocks')
+                    .doc(`${collection}__${key}`);
+            };
+
+            const assertNoLocalSettingDuplicate = (collection, name, excludeId = '') => {
+                const normalized = normalizeSettingName(name);
+                const duplicated = getSettingItemsByCollection(collection).some(item =>
+                    item.id !== excludeId && normalizeSettingName(item.name) === normalized
+                );
+                if (duplicated) throw createDuplicateSettingError(name);
+            };
+
+            const addUniqueSetting = async (collection, rawName) => {
+                const name = cleanSettingName(rawName);
+                assertNoLocalSettingDuplicate(collection, name);
+
+                const list = getSettingItemsByCollection(collection);
+                const nextOrder = list.length > 0 ? Math.max(...list.map(item => item.order || 0)) + 1 : 0;
+                const basePath = db.collection('artifacts').doc(appId).collection('public').doc('data');
+                const itemRef = basePath.collection(collection).doc();
+                const lockRef = getSettingNameLockRef(collection, name);
+                const now = new Date().toISOString();
+
+                await db.runTransaction(async transaction => {
+                    const lockSnap = await transaction.get(lockRef);
+                    if (lockSnap.exists) throw createDuplicateSettingError(name);
+
+                    transaction.set(itemRef, { name, order: nextOrder, createdAt: now });
+                    transaction.set(lockRef, {
+                        collection,
+                        itemId: itemRef.id,
+                        name,
+                        nameKey: normalizeSettingName(name),
+                        updatedAt: now
+                    });
+                });
+            };
+
+            const renameUniqueSetting = async (collection, item, rawName) => {
+                const name = cleanSettingName(rawName);
+                assertNoLocalSettingDuplicate(collection, name, item.id);
+
+                const basePath = db.collection('artifacts').doc(appId).collection('public').doc('data');
+                const itemRef = basePath.collection(collection).doc(item.id);
+                const newLockRef = getSettingNameLockRef(collection, name);
+                const oldLockRef = getSettingNameLockRef(collection, item.name);
+                const sameKey = normalizeSettingName(item.name) === normalizeSettingName(name);
+                const now = new Date().toISOString();
+
+                await db.runTransaction(async transaction => {
+                    const newLockSnap = await transaction.get(newLockRef);
+                    const oldLockSnap = sameKey ? null : await transaction.get(oldLockRef);
+
+                    if (newLockSnap.exists && newLockSnap.data()?.itemId !== item.id) {
+                        throw createDuplicateSettingError(name);
+                    }
+
+                    transaction.update(itemRef, { name });
+                    transaction.set(newLockRef, {
+                        collection,
+                        itemId: item.id,
+                        name,
+                        nameKey: normalizeSettingName(name),
+                        updatedAt: now
+                    });
+
+                    if (!sameKey && oldLockSnap?.exists && oldLockSnap.data()?.itemId === item.id) {
+                        transaction.delete(oldLockRef);
+                    }
+                });
+            };
+
+            const deleteUniqueSetting = async (collection, item) => {
+                const basePath = db.collection('artifacts').doc(appId).collection('public').doc('data');
+                const itemRef = basePath.collection(collection).doc(item.id);
+                const lockRef = getSettingNameLockRef(collection, item.name);
+
+                await db.runTransaction(async transaction => {
+                    const lockSnap = await transaction.get(lockRef);
+                    transaction.delete(itemRef);
+                    if (lockSnap.exists && lockSnap.data()?.itemId === item.id) {
+                        transaction.delete(lockRef);
+                    }
+                });
+            };
+
+            const handleInputDialogConfirm = async () => {
+                const value = cleanSettingName(inputDialog.value);
+                if (!value || inputDialogSubmitting) return;
+
+                setInputDialogSubmitting(true);
+                setInputDialog(prev => ({ ...prev, error: '' }));
+                try {
+                    await inputDialog.onConfirm(value);
+                    setInputDialog({ isOpen: false, title: '', value: '', placeholder: '', onConfirm: null, error: '' });
+                } catch (error) {
+                    console.error('設定名稱儲存失敗:', error);
+                    if (error?.code === 'duplicate-setting-name') {
+                        setInputDialog(prev => ({ ...prev, error: `「${value}」已存在，名稱不能重複。` }));
+                    } else {
+                        setInputDialog(prev => ({ ...prev, error: '儲存失敗，請稍後再試。' }));
+                    }
+                } finally {
+                    setInputDialogSubmitting(false);
+                }
+            };
 
             // --- 日常記帳相關 ---
             const submitDailyExpense = async (e) => {
@@ -2241,7 +2419,7 @@
                                                 <h3 className="font-black text-xl leading-tight text-[var(--bubble-text)] break-words">{t.text}</h3>
                                             </div>
                                             <div className="relative mt-1.5 pr-[98px]">
-                                                <div className="flex flex-wrap gap-0.5">
+                                                <div className="flex flex-wrap gap-1.5">
                                                     <span className="tag bg-[var(--pastel-gray)] text-gray-700 shadow-sm">{t.category}</span>
                                                     {currentOwners.map(o => <span key={o} className="tag bg-[#F8FAFC] text-[var(--bubble-text)] border border-gray-100">{o}</span>)}
                                                 </div>
@@ -2660,9 +2838,7 @@
                                 )}
                                 {!isOrderEditing && (
                                     <button disabled={isProcessing} onClick={()=>showInput(`新增${title}`, '', '請輸入名稱...', async (newName) => {
-                                        const list = collection === 'members' ? members : collection === 'categories' ? categories : expenseItems;
-                                        const nextOrder = list.length > 0 ? Math.max(...list.map(l => l.order || 0)) + 1 : 0;
-                                        await db.collection('artifacts').doc(appId).collection('public').doc('data').collection(collection).add({ name: newName, order: nextOrder, createdAt: new Date().toISOString() });
+                                        await addUniqueSetting(collection, newName);
                                     })} className="bubble-btn btn-primary !py-1.5 !px-3 !text-[12px] disabled:opacity-40"><Icon name="plus" size={15}/> 新增</button>
                                 )}
                             </div>
@@ -2704,10 +2880,10 @@
                                         ) : (
                                             <div className="flex gap-1.5 shrink-0">
                                                 <button disabled={isProcessing} onClick={()=>showInput(`編輯名稱`, item.name, '輸入新名稱', async (newName) => {
-                                                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection(collection).doc(item.id).update({ name: newName });
+                                                    await renameUniqueSetting(collection, item, newName);
                                                 })} className="p-2 rounded-xl text-[var(--text-blue)] bg-[var(--pastel-blue)]/20 hover:bg-[var(--pastel-blue)] transition-all disabled:opacity-40"><Icon name="edit-2" size={18}/></button>
                                                 <button disabled={isProcessing} onClick={()=>showConfirm('確認刪除', `確定要刪除「${item.name}」嗎？`, async () => {
-                                                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection(collection).doc(item.id).delete();
+                                                    await deleteUniqueSetting(collection, item);
                                                 })} className="p-2 rounded-xl text-[var(--text-orange)] bg-[var(--pastel-orange)]/20 hover:bg-[var(--pastel-orange)] transition-all disabled:opacity-40"><Icon name="trash-2" size={18}/></button>
                                             </div>
                                         )}
@@ -2936,10 +3112,23 @@
                         <div className="modal-overlay">
                             <div className="bubble-card bg-[var(--pastel-blue)] p-6 w-full max-w-sm modal-panel animate-in zoom-in-95 duration-200 shadow-2xl border-none mx-4">
                                 <h3 className="font-black text-2xl mb-4 text-[var(--text-blue)] drop-shadow-sm">{inputDialog.title}</h3>
-                                <input className="w-full min-w-0 !max-w-full mb-6 !border-none !bg-white" value={inputDialog.value} onChange={e=>setInputDialog({...inputDialog, value: e.target.value})} placeholder={inputDialog.placeholder} autoFocus />
+                                <input
+                                    className={`w-full min-w-0 !max-w-full !border-none !bg-white ${inputDialog.error ? 'mb-2' : 'mb-6'}`}
+                                    value={inputDialog.value}
+                                    onChange={e=>setInputDialog({...inputDialog, value: e.target.value, error: ''})}
+                                    placeholder={inputDialog.placeholder}
+                                    autoFocus
+                                />
+                                {inputDialog.error && (
+                                    <div className="mb-4 rounded-[14px] bg-red-50 border border-red-100 px-3 py-2 text-left text-[13px] font-bold text-red-700">
+                                        {inputDialog.error}
+                                    </div>
+                                )}
                                 <div className="flex gap-3">
-                                    <button onClick={()=>setInputDialog({isOpen:false})} className="bubble-btn bg-white/40 text-[var(--text-blue)] flex-1 py-3 hover:bg-white/60">取消</button>
-                                    <button onClick={()=>{ if(inputDialog.value.trim()){ inputDialog.onConfirm(inputDialog.value.trim()); setInputDialog({isOpen:false}); } }} className="bubble-btn bg-white text-[var(--text-blue)] flex-1 py-3 shadow-lg">確認儲存</button>
+                                    <button disabled={inputDialogSubmitting} onClick={()=>setInputDialog({isOpen:false})} className="bubble-btn bg-white/40 text-[var(--text-blue)] flex-1 py-3 hover:bg-white/60 disabled:opacity-50">取消</button>
+                                    <button disabled={inputDialogSubmitting || !inputDialog.value.trim()} onClick={handleInputDialogConfirm} className="bubble-btn bg-white text-[var(--text-blue)] flex-1 py-3 shadow-lg disabled:opacity-50">
+                                        {inputDialogSubmitting ? '檢查中...' : '確認儲存'}
+                                    </button>
                                 </div>
                             </div>
                         </div>
@@ -2987,7 +3176,7 @@
                                     <h3 className="font-black text-2xl text-[var(--bubble-text)]">{projectEditingId ? "編輯專案" : "建立新專案"}</h3>
                                     <button onClick={closeProjectForm} className="p-2 bg-gray-50 rounded-full text-gray-500 hover:bg-gray-100"><Icon name="x" size={20}/></button>
                                 </div>
-                                <div className="p-4 sm:p-6 overflow-y-auto space-y-6 flex-grow bg-[#F8FAFC]/50">
+                                <div className="project-form-scroll p-4 sm:p-6 overflow-y-auto space-y-6 flex-grow bg-[#F8FAFC]/50">
                                     <div>
                                         <label className="font-black mb-2 block text-sm text-[var(--bubble-text)]/60">專案名稱</label>
                                         <input className="w-full min-w-0 !max-w-full text-xl !bg-white" placeholder="輸入名稱..." value={projectText} onChange={e=>setProjectText(e.target.value)} />
@@ -3088,7 +3277,7 @@
 
                                     <div className="bg-white p-5 rounded-[24px] shadow-sm border border-gray-100">
                                         <label className="font-black mb-2 block text-sm text-[var(--bubble-text)]/60">詳細備註</label>
-                                        <textarea className="w-full min-w-0 !max-w-full min-h-[100px] !bg-gray-50" placeholder="寫些什麼..." value={note} onChange={e=>setNote(e.target.value)}></textarea>
+                                        <textarea className="w-full min-w-0 !max-w-full min-h-[200px] !bg-gray-50" placeholder="寫些什麼..." value={note} onChange={e=>setNote(e.target.value)}></textarea>
                                     </div>
                                 </div>
                                 <div className="p-5 border-t-2 border-gray-50 bg-white">
