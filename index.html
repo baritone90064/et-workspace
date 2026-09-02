@@ -2183,32 +2183,6 @@
                 </div>
             ) : null;
 
-            const renderReminderList = (title, dateText, reminderProjects, iconName, colorClass) => reminderProjects.length > 0 ? (
-                <div className="bg-white rounded-[22px] p-4 shadow-sm border border-gray-50">
-                    <div className="flex items-center justify-between gap-2 mb-3">
-                        <div className="flex items-center gap-2">
-                            <span className={`w-9 h-9 rounded-[14px] flex items-center justify-center ${colorClass}`}>
-                                <Icon name={iconName} size={18} />
-                            </span>
-                            <div>
-                                <div className="font-black text-[15px] text-slate-700">{title}</div>
-                                <div className="font-bold text-[12px] text-slate-400">{dateText}</div>
-                            </div>
-                        </div>
-                        <span className="tag bg-[var(--pastel-gray)] text-gray-600">{reminderProjects.length} 項</span>
-                    </div>
-                    <div className="space-y-2">
-                        {reminderProjects.map(p => (
-                            <button key={p.id} type="button" onClick={()=>openProjectFromReminder(p)} className="w-full flex items-center gap-2 bg-[#F8FAFC] rounded-[16px] p-3 text-left hover:bg-[var(--bubble-bg)] transition-colors">
-                                <Icon name="calendar-days" size={16} className="text-[var(--text-mint)] flex-shrink-0" />
-                                <span className="min-w-0 flex-grow font-black text-[14px] text-slate-700 truncate">{p.text}</span>
-                                <span className="flex-shrink-0 font-bold text-[11px] text-slate-400 whitespace-nowrap">{formatProjectReminderDate(p)}</span>
-                            </button>
-                        ))}
-                    </div>
-                </div>
-            ) : null;
-
             const renderHomeScheduleReminders = () => {
                 const hasReminders = homeScheduleReminders.upcomingProjects.length > 0;
                 if (!hasReminders) return null;
@@ -2218,30 +2192,43 @@
 
                 return (
                     <div className="bubble-card bg-white/80 p-4 space-y-3 border-2 border-[var(--pastel-yellow)]/40">
-                        <button type="button" onClick={toggleHomeRemindersCollapse} className="w-full flex items-center justify-between gap-2 px-1 text-left" title={isHomeReminderCollapsed ? '展開行程提醒' : '收合行程提醒'}>
+                        <button
+                            type="button"
+                            onClick={toggleHomeRemindersCollapse}
+                            className="w-full flex items-center justify-between gap-2 px-1 text-left"
+                            title={isHomeReminderCollapsed ? '展開行程提醒' : '收合行程提醒'}
+                        >
                             <div className="flex items-center gap-2 min-w-0">
-                                <div className="bg-[var(--pastel-yellow)] p-2 rounded-2xl flex-shrink-0"><Icon name="bell" size={20} className="text-[var(--text-yellow)]" /></div>
+                                <div className="bg-[var(--pastel-yellow)] p-2 rounded-2xl flex-shrink-0">
+                                    <Icon name="bell" size={20} className="text-[var(--text-yellow)]" />
+                                </div>
                                 <div className="min-w-0">
                                     <h3 className="font-black text-lg text-[var(--bubble-text)] truncate">行程提醒</h3>
-                                    {isHomeReminderCollapsed && <div className="font-bold text-[12px] text-slate-400">未來 7 天共 {reminderCount} 項</div>}
+                                    <div className="font-bold text-[12px] text-slate-400">{reminderRangeText}</div>
                                 </div>
                             </div>
                             <div className="flex items-center gap-2 flex-shrink-0">
-                                {!isHomeReminderCollapsed && <span className="tag bg-[var(--pastel-gray)] text-gray-600">{reminderCount} 項</span>}
+                                <span className="tag bg-[var(--pastel-gray)] text-gray-600">{reminderCount} 項</span>
                                 <span className="bg-white text-slate-400 p-2 rounded-full shadow-sm border border-gray-100">
                                     <Icon name={isHomeReminderCollapsed ? "chevron-down" : "chevron-up"} size={16} />
                                 </span>
                             </div>
                         </button>
+
                         {!isHomeReminderCollapsed && (
-                            <div className="space-y-3">
-                                {renderReminderList(
-                                    '未來 7 天行程',
-                                    reminderRangeText,
-                                    homeScheduleReminders.upcomingProjects,
-                                    'calendar-days',
-                                    'bg-[var(--pastel-mint)] text-[var(--text-mint)]'
-                                )}
+                            <div className="bg-white rounded-[22px] p-3 shadow-sm border border-gray-50 space-y-2">
+                                {homeScheduleReminders.upcomingProjects.map(p => (
+                                    <button
+                                        key={p.id}
+                                        type="button"
+                                        onClick={()=>openProjectFromReminder(p)}
+                                        className="w-full flex items-center gap-2 bg-[#F8FAFC] rounded-[16px] p-3 text-left hover:bg-[var(--bubble-bg)] transition-colors"
+                                    >
+                                        <Icon name="calendar-days" size={16} className="text-[var(--text-mint)] flex-shrink-0" />
+                                        <span className="min-w-0 flex-grow font-black text-[14px] text-slate-700 truncate">{p.text}</span>
+                                        <span className="flex-shrink-0 font-bold text-[11px] text-slate-400 whitespace-nowrap">{formatProjectReminderDate(p)}</span>
+                                    </button>
+                                ))}
                             </div>
                         )}
                     </div>
