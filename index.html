@@ -3040,7 +3040,32 @@
                                             {dailyOwnerOptions.map(o => <option key={o} value={o}>{o}</option>)}
                                         </select>
                                     </div>
-                                    <select value={dailyQueryDraft.project} onChange={e=>setDailyQueryDraft({...dailyQueryDraft, project: e.target.value})} className="w-full min-w-0 !max-w-full !text-sm">
+                                    <select
+                                        value={dailyQueryDraft.project}
+                                        onChange={e => {
+                                            const nextProjectId = e.target.value;
+
+                                            // 選擇實際專案時，自動帶入該專案原本的起訖日期。
+                                            // 日期仍可由使用者手動修改。
+                                            // 切回「全部專案」或「無專案」時，保留目前日期，不主動重設。
+                                            if (nextProjectId !== 'all' && nextProjectId !== 'none') {
+                                                const selectedProject = projects.find(project => project.id === nextProjectId);
+                                                const range = selectedProject ? getProjectDateRange(selectedProject) : null;
+                                                setDailyQueryDraft(prev => ({
+                                                    ...prev,
+                                                    project: nextProjectId,
+                                                    start: range?.start || prev.start,
+                                                    end: range?.end || prev.end
+                                                }));
+                                            } else {
+                                                setDailyQueryDraft(prev => ({
+                                                    ...prev,
+                                                    project: nextProjectId
+                                                }));
+                                            }
+                                        }}
+                                        className="w-full min-w-0 !max-w-full !text-sm"
+                                    >
                                         <option value="all">專案</option>
                                         <option value="none">無專案</option>
                                         {projects.map(project => <option key={project.id} value={project.id}>{project.text}</option>)}
