@@ -411,6 +411,29 @@
             return range.start <= rangeEnd && range.end >= rangeStart;
         };
 
+        // 查詢 / 篩選用：日期可為 All、只有起日、只有迄日，或完整起訖日期。
+        // 只要專案與指定日期區間有全部或部分重疊，就視為符合。
+        const projectOverlapsOptionalDateRange = (project, rangeStart, rangeEnd) => {
+            const range = getProjectDateRange(project);
+            if (!range) return false;
+            if (rangeStart && range.end < rangeStart) return false;
+            if (rangeEnd && range.start > rangeEnd) return false;
+            return true;
+        };
+
+        // 查詢 / 篩選的專案選單統一依「專案開始日期」由新到舊排序；
+        // 同日起日再依結束日期由新到舊，沒有日期的專案排最後。
+        const sortProjectsByDateDesc = (a, b) => {
+            const rangeA = getProjectDateRange(a);
+            const rangeB = getProjectDateRange(b);
+            if (!rangeA && !rangeB) return String(a.text || '').localeCompare(String(b.text || ''), 'zh-Hant');
+            if (!rangeA) return 1;
+            if (!rangeB) return -1;
+            if (rangeA.start !== rangeB.start) return rangeB.start.localeCompare(rangeA.start);
+            if (rangeA.end !== rangeB.end) return rangeB.end.localeCompare(rangeA.end);
+            return String(a.text || '').localeCompare(String(b.text || ''), 'zh-Hant');
+        };
+
         // 記帳選專案使用：只要記帳日期落在專案起訖期間內即可。
         // 若只有起日，視為自起日起持續；若只有迄日，視為迄日前皆可補登。
         const projectIncludesExpenseDate = (project, dateStr) => {
@@ -1822,6 +1845,49 @@
                 return Boolean(projectQuery.text.trim() || projectQuery.start || projectQuery.end || projectQuery.category !== 'all' || projectQuery.expenseItem !== 'all' || projectQuery.owner !== 'all' || selectedCalDate);
             }, [projectQuery, selectedCalDate]);
 
+            const getProjectsForQueryRange = (rangeStart, rangeEnd, projectCategory = 'all') => {
+                const hasDateLimit = Boolean(rangeStart || rangeEnd);
+                return projects
+                    .filter(project => {
+                        if (hasDateLimit && !projectOverlapsOptionalDateRange(project, rangeStart, rangeEnd)) return false;
+                        if (projectCategory !== 'all' && project.category !== projectCategory) return false;
+                        return true;
+                    })
+                    .sort(sortProjectsByDateDesc);
+            };
+
+            const keepProjectIfOverlapping = (projectId, rangeStart, rangeEnd) => {
+                if (projectId === 'all' || projectId === 'none') return projectId;
+                const selectedProject = projects.find(project => project.id === projectId);
+                return selectedProject && projectOverlapsOptionalDateRange(selectedProject, rangeStart, rangeEnd)
+                    ? projectId
+                    : 'all';
+            };
+
+            const updateDailyQueryDraftDate = (field, value) => {
+                setDailyQueryDraft(prev => {
+                    const nextStart = field === 'start' ? value : prev.start;
+                    const nextEnd = field === 'end' ? value : prev.end;
+                    return {
+                        ...prev,
+                        [field]: value,
+                        project: keepProjectIfOverlapping(prev.project, nextStart, nextEnd)
+                    };
+                });
+            };
+
+            const updateAnalyticsDraftDate = (field, value) => {
+                const nextStart = field === 'start' ? value : analyticsDraftStart;
+                const nextEnd = field === 'end' ? value : analyticsDraftEnd;
+
+                if (field === 'start') setAnalyticsDraftStart(value);
+                else setAnalyticsDraftEnd(value);
+
+                setAnalyticsDraftProjectFilter(prev =>
+                    keepProjectIfOverlapping(prev, nextStart, nextEnd)
+                );
+            };
+
             const openDailyQueryPanel = () => { setDailyQueryDraft({...dailyQuery}); setIsDailyQueryOpen(true); };
             const applyDailyQuery = () => { setDailyQuery({...dailyQueryDraft}); setIsDailyQueryOpen(false); };
             const clearDailyQuery = () => {
@@ -1832,7 +1898,12 @@
             };
             const applyDailyDateShortcut = (shortcut) => {
                 const range = getDateRangeByShortcut(shortcut);
-                setDailyQueryDraft(prev => ({ ...prev, start: range.start, end: range.end }));
+                setDailyQueryDraft(prev => ({
+                    ...prev,
+                    start: range.start,
+                    end: range.end,
+                    project: keepProjectIfOverlapping(prev.project, range.start, range.end)
+                }));
             };
 
             const openProjectQueryPanel = () => { setProjectQueryDraft({...projectQuery}); setIsProjectQueryOpen(true); };
@@ -1847,6 +1918,9 @@
                 const range = getDateRangeByShortcut(shortcut);
                 setAnalyticsDraftStart(range.start);
                 setAnalyticsDraftEnd(range.end);
+                setAnalyticsDraftProjectFilter(prev =>
+                    keepProjectIfOverlapping(prev, range.start, range.end)
+                );
             };
 
             const applyAnalyticsFilters = () => {
@@ -2553,8 +2627,8 @@
                                     <button onClick={()=>applyAnalyticsDateShortcut('lastMonth')} className="bubble-btn btn-outline !py-1.5 !px-2 !text-xs !rounded-xl">上月</button>
                                 </div>
                                 <div className="grid grid-cols-2 gap-2">
-                                    <input type="date" value={analyticsDraftStart} onChange={e=>setAnalyticsDraftStart(e.target.value)} className="w-full min-w-0 !max-w-full !bg-white !px-2 !py-2 !text-[12px] sm:text-sm text-center" />
-                                    <input type="date" value={analyticsDraftEnd} onChange={e=>setAnalyticsDraftEnd(e.target.value)} className="w-full min-w-0 !max-w-full !bg-white !px-2 !py-2 !text-[12px] sm:text-sm text-center" />
+                                    <input type="date" value={analyticsDraftStart} onChange={e=>updateAnalyticsDraftDate('start', e.target.value)} className="w-full min-w-0 !max-w-full !bg-white !px-2 !py-2 !text-[12px] sm:text-sm text-center" />
+                                    <input type="date" value={analyticsDraftEnd} onChange={e=>updateAnalyticsDraftDate('end', e.target.value)} className="w-full min-w-0 !max-w-full !bg-white !px-2 !py-2 !text-[12px] sm:text-sm text-center" />
                                 </div>
                                 {isAnalyticsDraftDateInvalid && <div className="text-[var(--text-orange)] text-xs font-bold">截止日期不能早於起始日期！</div>}
                                 <div className="grid grid-cols-2 gap-2">
@@ -2568,14 +2642,51 @@
                                     </select>
                                 </div>
                                 <div className="grid grid-cols-2 gap-2">
-                                    <select value={analyticsDraftProjectCategoryFilter} onChange={e=>setAnalyticsDraftProjectCategoryFilter(e.target.value)} className="w-full min-w-0 !max-w-full !py-2 !px-3 !text-sm">
+                                    <select
+                                        value={analyticsDraftProjectCategoryFilter}
+                                        onChange={e => {
+                                            const nextCategory = e.target.value;
+                                            setAnalyticsDraftProjectCategoryFilter(nextCategory);
+                                            setAnalyticsDraftProjectFilter(prev => {
+                                                if (prev === 'all' || prev === 'none') return prev;
+                                                const selectedProject = projects.find(project => project.id === prev);
+                                                return selectedProject && (nextCategory === 'all' || selectedProject.category === nextCategory)
+                                                    ? prev
+                                                    : 'all';
+                                            });
+                                        }}
+                                        className="w-full min-w-0 !max-w-full !py-2 !px-3 !text-sm"
+                                    >
                                         <option value="all">專案分類</option>
                                         {categories.map(categoryItem => <option key={categoryItem.id} value={categoryItem.name}>{categoryItem.name}</option>)}
                                     </select>
-                                    <select value={analyticsDraftProjectFilter} onChange={e=>setAnalyticsDraftProjectFilter(e.target.value)} className="w-full min-w-0 !max-w-full !py-2 !px-3 !text-sm">
+                                    <select
+                                        value={analyticsDraftProjectFilter}
+                                        onChange={e => {
+                                            const nextProjectId = e.target.value;
+                                            setAnalyticsDraftProjectFilter(nextProjectId);
+
+                                            // 選擇實際專案時，自動帶入專案原本日期；之後仍可手動修改日期。
+                                            if (nextProjectId !== 'all' && nextProjectId !== 'none') {
+                                                const selectedProject = projects.find(project => project.id === nextProjectId);
+                                                const range = selectedProject ? getProjectDateRange(selectedProject) : null;
+                                                if (range) {
+                                                    setAnalyticsDraftStart(range.start);
+                                                    setAnalyticsDraftEnd(range.end);
+                                                }
+                                            }
+                                        }}
+                                        className="w-full min-w-0 !max-w-full !py-2 !px-3 !text-sm"
+                                    >
                                         <option value="all">專案</option>
                                         <option value="none">無專案</option>
-                                        {projects.map(project => <option key={project.id} value={project.id}>{project.text}</option>)}
+                                        {getProjectsForQueryRange(
+                                            analyticsDraftStart,
+                                            analyticsDraftEnd,
+                                            analyticsDraftProjectCategoryFilter
+                                        ).map(project => (
+                                            <option key={project.id} value={project.id}>{project.text}</option>
+                                        ))}
                                     </select>
                                 </div>
                                 <input type="text" value={analyticsDraftKeyword} onChange={e=>setAnalyticsDraftKeyword(e.target.value)} placeholder="關鍵字：備註、專案名稱..." className="w-full min-w-0 !max-w-full !py-2 !px-3 !text-sm" />
@@ -3027,8 +3138,8 @@
                                         <button onClick={()=>applyDailyDateShortcut('lastMonth')} className="bubble-btn btn-outline !py-1.5 !px-2 !text-xs !rounded-xl">上月</button>
                                     </div>
                                     <div className="grid grid-cols-2 gap-2">
-                                        <input type="date" value={dailyQueryDraft.start} onChange={e=>setDailyQueryDraft({...dailyQueryDraft, start: e.target.value})} className="w-full min-w-0 !max-w-full !text-[12px] text-center" />
-                                        <input type="date" value={dailyQueryDraft.end} onChange={e=>setDailyQueryDraft({...dailyQueryDraft, end: e.target.value})} className="w-full min-w-0 !max-w-full !text-[12px] text-center" />
+                                        <input type="date" value={dailyQueryDraft.start} onChange={e=>updateDailyQueryDraftDate('start', e.target.value)} className="w-full min-w-0 !max-w-full !text-[12px] text-center" />
+                                        <input type="date" value={dailyQueryDraft.end} onChange={e=>updateDailyQueryDraftDate('end', e.target.value)} className="w-full min-w-0 !max-w-full !text-[12px] text-center" />
                                     </div>
                                     <div className="grid grid-cols-2 gap-2">
                                         <select value={dailyQueryDraft.item} onChange={e=>setDailyQueryDraft({...dailyQueryDraft, item: e.target.value})} className="w-full min-w-0 !max-w-full !text-sm">
@@ -3045,9 +3156,7 @@
                                         onChange={e => {
                                             const nextProjectId = e.target.value;
 
-                                            // 選擇實際專案時，自動帶入該專案原本的起訖日期。
-                                            // 日期仍可由使用者手動修改。
-                                            // 切回「全部專案」或「無專案」時，保留目前日期，不主動重設。
+                                            // 選擇實際專案時，自動帶入該專案原本的日期區間；日期之後仍可手動修改。
                                             if (nextProjectId !== 'all' && nextProjectId !== 'none') {
                                                 const selectedProject = projects.find(project => project.id === nextProjectId);
                                                 const range = selectedProject ? getProjectDateRange(selectedProject) : null;
@@ -3058,17 +3167,16 @@
                                                     end: range?.end || prev.end
                                                 }));
                                             } else {
-                                                setDailyQueryDraft(prev => ({
-                                                    ...prev,
-                                                    project: nextProjectId
-                                                }));
+                                                setDailyQueryDraft(prev => ({ ...prev, project: nextProjectId }));
                                             }
                                         }}
                                         className="w-full min-w-0 !max-w-full !text-sm"
                                     >
                                         <option value="all">專案</option>
                                         <option value="none">無專案</option>
-                                        {projects.map(project => <option key={project.id} value={project.id}>{project.text}</option>)}
+                                        {getProjectsForQueryRange(dailyQueryDraft.start, dailyQueryDraft.end).map(project => (
+                                            <option key={project.id} value={project.id}>{project.text}</option>
+                                        ))}
                                     </select>
                                     <input type="text" value={dailyQueryDraft.note} onChange={e=>setDailyQueryDraft({...dailyQueryDraft, note: e.target.value})} placeholder="搜尋備註..." className="w-full min-w-0 !max-w-full !text-sm" />
                                     <div className="flex gap-3 pt-2">
